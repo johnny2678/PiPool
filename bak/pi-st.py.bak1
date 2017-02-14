@@ -1,0 +1,77 @@
+#!/usr/bin/python3
+
+import sys
+import glob
+import re
+from io import BytesIO
+import json
+import pprint
+import requests
+import time
+import subprocess
+import datetime
+
+#client id and client secret
+client = '97d8e45c-3605-465b-867a-dd83151bda43'
+access_token = 'dd281545-165a-49e0-aad7-6c3ff54ab5e7'
+
+base_dir = '/sys/bus/w1/devices/'
+device_folder = glob.glob(base_dir + '28*')[0]
+device_file = device_folder + '/w1_slave'
+
+#
+# 1st temp probe address - 28-800000262ce2
+
+niters = 60
+interval = 1
+ 
+def read_temp_raw_old():
+    f = open(device_file, 'r')
+    lines = f.readlines()
+    f.close()
+    return lines
+
+def read_temp_raw():
+	catdata = subprocess.Popen(['cat',device_file], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+	out,err = catdata.communicate()
+	out_decode = out.decode('utf-8')
+	lines = out_decode.split('\n')
+	return lines
+ 
+def read_temp():
+    lines = read_temp_raw()
+    while lines[0].strip()[-3:] != 'YES':
+        time.sleep(0.2)
+        lines = read_temp_raw()
+    equals_pos = lines[1].find('t=')
+    if equals_pos != -1:
+        temp_string = lines[1][equals_pos+2:]
+        temp_c = float(temp_string) / 1000.0
+        temp_f = temp_c * 9.0 / 5.0 + 32.0
+        return temp_c, temp_f
+
+def main():
+   old_temp = -999999999.99
+   endpoints_url = "https://graph.api.smartthings.com/api/smartapps/endpoints/%s?access_token=%s" % (client, access_token)
+   print ("endpoints_url: %s" % (endpoints_url))
+   r = requests.get(endpoints_url)
+   if (r.status_code != 200):
+      print("Error: " + r.status_code)
+   else:
+      theendpoints = json.loads( r.text )
+      print ("theendpoints: %s" % (theendpoints))
+      for counter in range(niters, 0, -1):
+         (temp_c, temp_f) = read_temp()
+         for endp in theendpoints:
+            uri = endp['uri']
+            temp_url = uri + ("/update/%.2f/F" % temp_f)
+            print ("URL: %s" % (temp_url))
+            headers = { 'Authorization' : 'Bearer ' + access_token }
+            if ( round(temp_f, 2) != round(old_temp, 2) ):
+               print ("Niter: %s\tdate: %s\ttemp_f: %s" % (counter, (datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")), temp_f))
+               r = requests.put(temp_url, headers=headers)
+         old_temp = temp_f
+         time.sleep(interval)
+
+main()
+
