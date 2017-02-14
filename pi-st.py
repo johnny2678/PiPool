@@ -25,7 +25,7 @@ logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 logger = logging.getLogger()
 logger.setLevel(logging.DEBUG)
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 
 
 fh = RotatingFileHandler('temp.log', maxBytes=10000, backupCount=10)
@@ -144,7 +144,7 @@ def main():
 #          if ( round(temp_f, 2) != round(old_temp[cnta], 2) ):
           if ( abs(round(temp_f, 2) - round(old_temp[cnta], 2)) > 0.18 ):
              logging.debug ("Endpoint submit URL: %s" % (endp_url))
-             logging.info ("Niter: %s\tdate: %s\tdsname: %s\ttemp_f: %s" % (counter, (datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")), dsname[cnta], temp_f))
+             logging.info ("Niter: %s\tdsname: %s\ttemp_f: %s" % (counter, dsname[cnta], temp_f))
 
              r = requests.put(endp_url, headers=headers)
 
