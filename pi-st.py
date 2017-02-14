@@ -12,11 +12,34 @@ import subprocess
 import datetime
 import re
 import logging
-import logging.config
+#import logging.config
 
-logging.config.fileConfig('/home/pi/logging.conf', disable_existing_loggers=False)
+#logging.config.fileConfig('/home/pi/logging.conf', disable_existing_loggers=False)
+#logging.fileConfig(loginpath, defaults={'logfilename': '/home/pi/temp.log'})
+#logging.getLogger("urllib3").setLevel(logging.WARNING)
+
+#================================
+# Logging
+from logging.handlers import RotatingFileHandler
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 
+logger = logging.getLogger()
+logger.setLevel(logging.DEBUG)
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+
+fh = RotatingFileHandler('temp.log', maxBytes=10000, backupCount=10)
+fh.setLevel(logging.INFO)
+fh.setFormatter(formatter)
+
+sh = logging.StreamHandler(stream=sys.stdout)
+sh.setLevel(logging.DEBUG)
+sh.setFormatter(formatter)
+
+logger.addHandler(fh)
+logger.addHandler(sh)
+
+#=================================
 base_dir = '/sys/bus/w1/devices/'
 
 #device name array
