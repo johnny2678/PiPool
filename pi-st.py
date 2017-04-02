@@ -33,7 +33,8 @@ fh.setLevel(logging.INFO)
 fh.setFormatter(formatter)
 
 sh = logging.StreamHandler(stream=sys.stdout)
-sh.setLevel(logging.DEBUG)
+#sh.setLevel(logging.DEBUG)
+sh.setLevel(logging.INFO)
 sh.setFormatter(formatter)
 
 logger.addHandler(fh)
@@ -116,6 +117,9 @@ def main():
    old_temp = []
    temp_url = []
    i=0
+   upper_submit_limit = 125
+   lower_submit_limit = 45
+
    for tmpdsid in dsid:
        old_temp.append(-99999999.99)
        get_endpoints = ( "https://graph.api.smartthings.com/api/smartapps/endpoints/" + client_id[i] + "?access_token=" + ds_token[i] )
@@ -142,7 +146,7 @@ def main():
           headers = { 'Authorization' : 'Bearer ' + ds_token[cnta] } 
           
 #          if ( round(temp_f, 2) != round(old_temp[cnta], 2) ):
-          if ( abs(round(temp_f, 2) - round(old_temp[cnta], 2)) > 0.18 ):
+          if ( abs(round(temp_f, 2) - round(old_temp[cnta], 2)) > 0.18 and lower_submit_limit <= temp_f <= upper_submit_limit):
              logging.debug ("Endpoint submit URL: %s" % (endp_url))
              logging.info ("Niter: %s\tdsname: %s\ttemp_f: %s" % (counter, dsname[cnta], temp_f))
 
