@@ -28,7 +28,7 @@ logger.setLevel(logging.DEBUG)
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 
 
-fh = RotatingFileHandler('temp.log', maxBytes=10000, backupCount=10)
+fh = RotatingFileHandler('/var/log/PiPool/PiPool.log', maxBytes=10000, backupCount=10)
 fh.setLevel(logging.INFO)
 fh.setFormatter(formatter)
 
