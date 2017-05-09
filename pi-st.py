@@ -137,24 +137,27 @@ def read_temp(cntb):
 
 def influxdb(counter, temp_f, sub_dsname,sub_last_temp_influx):
   logging.info ("Sending to InfluxDB (Cycle %s): dsname: %s\ttemp_f: %s (oldtemp: %s)" % (counter, sub_dsname, temp_f, sub_last_temp_influx))
-  pump_mode = check_pump_mode(nodejs_poolcontroller)
+  pump_mode = get_pump_mode(nodejs_poolcontroller)
+  pump_rpm, pump_watts = get_pump_rpm(nodejs_poolcontroller)
 
   influx_json = [
   {
-    "measurement": "temp_f",
+    "measurement": "Pool",
     "tags": {
        "sensor": sub_dsname,
        "mode": pump_mode
     },
     "fields": {
-       "value": temp_f
+       "temp": temp_f,
+       "pump_rpm": pump_rpm,
+       "pump_watts": pump_watts
     }
   }
 ]
         
   client.write_points(influx_json)
 
-def check_pump_onoff(nodejs_poolcontroller):
+def get_pump_onoff(nodejs_poolcontroller):
   if nodejs_poolcontroller:
     url = 'http://192.168.5.31:3000/pump'
     r = requests.get(url)
@@ -164,8 +167,10 @@ def check_pump_onoff(nodejs_poolcontroller):
     if pump_onoff == 0:
       logging.warning("Pump is not running. Exiting.")
       exit()
+  else:
+    logging.info("Node.js Pool Controller is not installed - skipping getting pump on/off status")
 
-def check_pump_mode(nodejs_poolcontroller):
+def get_pump_mode(nodejs_poolcontroller):
   if nodejs_poolcontroller:
     url = 'http://192.168.5.31:3000/circuit/1'
     r = requests.get(url)
@@ -181,6 +186,21 @@ def check_pump_mode(nodejs_poolcontroller):
     else:
       logging.error("Circuit 1 status (SPA) can't be read. Exiting")
       exit()
+  else:
+    logging.info("Node.js Pool Controller is not installed - skipping getting pump mode(pool/spa)")
+
+def get_pump_rpm(nodejs_poolcontroller):
+  if nodejs_poolcontroller:
+    url = 'http://192.168.5.31:3000/pump'
+    r = requests.get(url)
+    resp = json.loads(r.text)
+    pumprpm = resp[1]['rpm']
+    pumpwatts = resp[1]['watts']
+
+    return pumprpm, pumpwatts
+  else:
+    logging.info("Node.js Pool Controller is not installed - skipping getting pump rpm/watts")
+
 
 def main():
    last_temp_st = {}
@@ -213,7 +233,7 @@ def main():
    for counter in range(niters, 0, -1):
        cnta=0
 
-       check_pump_onoff(nodejs_poolcontroller)
+       get_pump_onoff(nodejs_poolcontroller)
 
        for tmpds in dsid:
        	  (temp_c, temp_f) = read_temp(cnta)
@@ -236,7 +256,7 @@ def main():
 
 
 
-check_pump_onoff(nodejs_poolcontroller)
+get_pump_onoff(nodejs_poolcontroller)
 
 #device files array
 dsfile = []
