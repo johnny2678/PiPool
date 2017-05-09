@@ -14,6 +14,47 @@ import datetime
 import re
 import logging
 
+#================================
+# Script Setup
+#
+# Should the script check for the nodejs_poolcontroller found here and only run when the pump is running?
+# https://github.com/tagyoureit/nodejs-poolController
+# Set to False if you don't have Intellitouch and the above script reading RS485 commands from the Intellitouch COM port
+nodejs_poolcontroller = True
+
+# Documentation TBD 
+sendto_smartthings = True
+
+# Send data to influxDB
+sendto_influxdb = True
+
+if sendto_influxdb:
+   influx_host = '192.168.5.133'
+   influx_port = 8086
+   influx_user = 'root'
+   influx_password = 'root'
+   influx_db = 'PiPool'
+   influx_db_retention_policy_name = 'PiPool retention'
+   influx_db_retention_duration = '720d'
+   influx_db_retention_replication = 1
+
+   from influxdb import InfluxDBClient
+   client = InfluxDBClient(influx_host, influx_port, influx_user, influx_password, influx_db)
+
+   try:
+      logging.info("Creating (if not exists) INFLUX DB %s" % (influx_db))
+      client.create_database(influx_db)
+   except IOError as e:
+      logging.error("Unable to create/connect to INFLUX DB %s" % (influx_db))
+      exit()
+
+   try:
+      logging.info("Creating (if not exists) retention policy on INFLUX DB %s" % (influx_db))
+      client.create_retention_policy(influx_db_retention_policy_name, influx_db_retention_duration, influx_db_retention_replication)
+   except IOError as e:
+      logging.error("Unable to create INFLUX DB retention policy on DB %s" % (influx_db))
+      exit()
+   
 
 #================================
 # Logging
@@ -25,7 +66,7 @@ logger.setLevel(logging.DEBUG)
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 
 
-fh = RotatingFileHandler('/var/log/PiPool/PiPool.log', maxBytes=10000, backupCount=10)
+fh = RotatingFileHandler('/var/log/PiPool/PiPool.log', maxBytes=100000, backupCount=10)
 fh.setLevel(logging.INFO)
 #fh.setLevel(logging.DEBUG)
 fh.setFormatter(formatter)
@@ -71,32 +112,6 @@ ds_token= ['8c98af31-267e-4704-aa10-fe696f34c041'
 ]
 
 ### no modifications should be needed below this line
-# ===================================================
-# test node.js pool controller call to see if pump is running
-url = 'http://192.168.5.31:3000/pump'
-r = requests.get(url)
-pumps = json.loads(r.text)
-pump_onoff=pumps[1]['power']
-
-if pump_onoff == 0:
-	logging.warning("Pump is not running. Exiting.")
-	exit();
-
-#device files array
-dsfile = []
-for tmpdsid in dsid:
-   tmpfile = (base_dir + tmpdsid + '/w1_slave')
-   try:
-      with open(tmpfile) as file:
-       	 logging.info("Found DS18B20 sensor %s" % (tmpdsid))
-         pass
-   except IOError as e:
-      logging.error("Could not find DS18B20 sensor %s. Exiting." % (tmpfile))
-      exit();
-   dsfile.append(base_dir + tmpdsid + '/w1_slave')
-
-niters = 6
-interval = 15
 
 def read_temp_raw(cntc):
     logging.debug ("\t\tread_temp_raw(%i): %s" % (cntc,dsfile[cntc]))
@@ -119,50 +134,127 @@ def read_temp(cntb):
         temp_c = float(temp_string) / 1000.0
        	temp_f = temp_c * 9.0 / 5.0 + 32.0
         return temp_c, temp_f
+
+def influxdb(counter, temp_f, sub_dsname,sub_last_temp_influx):
+  logging.info ("Sending to InfluxDB (Cycle %s): dsname: %s\ttemp_f: %s (oldtemp: %s)" % (counter, sub_dsname, temp_f, sub_last_temp_influx))
+  pump_mode = check_pump_mode(nodejs_poolcontroller)
+
+  influx_json = [
+  {
+    "measurement": "temp_f",
+    "tags": {
+       "sensor": sub_dsname,
+       "mode": pump_mode
+    },
+    "fields": {
+       "value": temp_f
+    }
+  }
+]
+        
+  client.write_points(influx_json)
+
+def check_pump_onoff(nodejs_poolcontroller):
+  if nodejs_poolcontroller:
+    url = 'http://192.168.5.31:3000/pump'
+    r = requests.get(url)
+    pumps = json.loads(r.text)
+    pump_onoff = pumps[1]['power']
+
+    if pump_onoff == 0:
+      logging.warning("Pump is not running. Exiting.")
+      exit()
+
+def check_pump_mode(nodejs_poolcontroller):
+  if nodejs_poolcontroller:
+    url = 'http://192.168.5.31:3000/circuit/1'
+    r = requests.get(url)
+    resp = json.loads(r.text)
+    pumpmode = resp['status']
+
+    if pumpmode == 0:
+      logging.debug("Circuit 1 status = POOL (OFF)")
+      return 'pool'
+    elif pumpmode == 1:
+      logging.debug("Circuit 1 status = SPA (ON)")
+      return 'spa'
+    else:
+      logging.error("Circuit 1 status (SPA) can't be read. Exiting")
+      exit()
+
 def main():
-   old_temp = []
+   last_temp_st = {}
+   last_temp_influx = {}
    temp_url = []
    i=0
    upper_submit_limit = 125
    lower_submit_limit = 45
 
    for tmpdsid in dsid:
-       old_temp.append(-99999999.99)
-       get_endpoints = ( "https://graph.api.smartthings.com/api/smartapps/endpoints/" + client_id[i] + "?access_token=" + ds_token[i] )
-       req =  requests.get(get_endpoints)
-       if (req.status_code != 200):
-          logging.error ("Error: " + str(r.status_code) + "exiting.")
-       	  exit()
-       else:
-       	  logging.info ("Endpoint URL for %s found!..." % (dsname[i]))
+       last_temp_st[tmpdsid]=9999999.99
+       last_temp_influx[tmpdsid]=9999999.99
 
-       endpoints = json.loads( req.text )
+       get_endpoints = ( "https://graph.api.smartthings.com/api/smartapps/endpoints/" + client_id[i] + "?access_token=" + ds_token[i] )
+       if sendto_smartthings:
+          req =  requests.get(get_endpoints)
+          if (req.status_code != 200):
+             logging.error ("Error: " + str(r.status_code) + "exiting.")
+       	     exit()
+          else:
+             logging.info ("Endpoint URL for %s found!..." % (dsname[i]))
+             endpoints = json.loads( req.text )
          
-       for endp in endpoints:
-       	  uri = endp['uri']
-          temp_url.append( uri + ("/update/"))
+             for endp in endpoints:
+               uri = endp['uri']
+               temp_url.append( uri + ("/update/"))
              
        i += 1
    
    for counter in range(niters, 0, -1):
        cnta=0
+
+       check_pump_onoff(nodejs_poolcontroller)
+
        for tmpds in dsid:
        	  (temp_c, temp_f) = read_temp(cnta)
           endp_url = temp_url[cnta] + ("%.2f/F" % temp_f)     
        	  headers = { 'Authorization' : 'Bearer ' + ds_token[cnta] } 
           
-#          if ( round(temp_f, 2) != round(old_temp[cnta], 2) ):
-          if ( abs(round(temp_f, 2) - round(old_temp[cnta], 2)) > 0.18 and lower_submit_limit <= temp_f <= upper_submit_limit):
+          if ( sendto_smartthings and abs(round(temp_f, 2) - round(last_temp_st[tmpds], 2)) > 0.18 and lower_submit_limit <= temp_f <= upper_submit_limit):
              logging.debug ("Endpoint submit URL: %s" % (endp_url))
-       	     logging.info ("Niter: %s\tdsname: %s\ttemp_f: %s" % (counter, dsname[cnta], temp_f))
-
+             logging.info ("Sending to Smartthings (Cycle %s): dsname: %s\ttemp_f: %s (oldtemp: %s)" % (counter, dsname[cnta], temp_f, last_temp_st[tmpds]))
              r = requests.put(endp_url, headers=headers)
+             last_temp_st[tmpds] = temp_f
 
-       	     old_temp[cnta] = temp_f
+          if ( sendto_influxdb and round(temp_f, 2) != round(last_temp_influx[tmpds], 2)):
+             influxdb(counter, temp_f, dsname[cnta], last_temp_influx[tmpds])
+             last_temp_influx[tmpds] = temp_f
 
           cnta += 1
 
        time.sleep(interval)
+
+
+
+check_pump_onoff(nodejs_poolcontroller)
+
+#device files array
+dsfile = []
+for tmpdsid in dsid:
+   tmpfile = (base_dir + tmpdsid + '/w1_slave')
+   try:
+      with open(tmpfile) as file:
+       	 logging.info("Found DS18B20 sensor %s" % (tmpdsid))
+         pass
+   except IOError as e:
+      logging.error("Could not find DS18B20 sensor %s. Exiting." % (tmpfile))
+      exit();
+   dsfile.append(base_dir + tmpdsid + '/w1_slave')
+
+niters = 120
+interval = 15
+
+
 
 main()
 
