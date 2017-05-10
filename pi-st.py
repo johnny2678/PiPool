@@ -119,6 +119,7 @@ def read_temp_raw(cntc):
     out,err = catdata.communicate()
     out_decode = out.decode('utf-8')
     lines = out_decode.split('\n')
+
     return lines
 
 def read_temp(cntb):
@@ -135,8 +136,8 @@ def read_temp(cntb):
        	temp_f = temp_c * 9.0 / 5.0 + 32.0
         return temp_c, temp_f
 
-def influxdb(counter, temp_f, sub_dsname,sub_last_temp_influx):
-  logging.info ("Sending to InfluxDB (Cycle %s): dsname: %s\ttemp_f: %s (oldtemp: %s)" % (counter, sub_dsname, temp_f, sub_last_temp_influx))
+def influxdb(counter, temp_f, sub_dsname, sub_last_temp_influx, sub_solar_temp_diff):
+  logging.info ("Sending to InfluxDB (Cycle %s): dsname: %s\ttemp_f: %s (oldtemp: %s solar diff: %s)" % (counter, sub_dsname, temp_f, sub_last_temp_influx, sub_solar_temp_diff))
   pump_mode = get_pump_mode(nodejs_poolcontroller)
   pump_rpm, pump_watts = get_pump_rpm(nodejs_poolcontroller)
 
@@ -149,6 +150,7 @@ def influxdb(counter, temp_f, sub_dsname,sub_last_temp_influx):
     },
     "fields": {
        "temp": temp_f,
+       "temp_solar_diff": sub_solar_temp_diff,
        "pump_rpm": pump_rpm,
        "pump_watts": pump_watts
     }
@@ -205,7 +207,9 @@ def get_pump_rpm(nodejs_poolcontroller):
 def main():
    last_temp_st = {}
    last_temp_influx = {}
+   cur_temp = {}
    temp_url = []
+   solar_temp_diff = None
    i=0
    upper_submit_limit = 125
    lower_submit_limit = 45
@@ -237,24 +241,35 @@ def main():
 
        for tmpds in dsid:
        	  (temp_c, temp_f) = read_temp(cnta)
+          cur_temp[tmpds] = temp_f
+
           endp_url = temp_url[cnta] + ("%.2f/F" % temp_f)     
        	  headers = { 'Authorization' : 'Bearer ' + ds_token[cnta] } 
           
-          if ( sendto_smartthings and abs(round(temp_f, 2) - round(last_temp_st[tmpds], 2)) > 0.18 and lower_submit_limit <= temp_f <= upper_submit_limit):
-             logging.debug ("Endpoint submit URL: %s" % (endp_url))
-             logging.info ("Sending to Smartthings (Cycle %s): dsname: %s\ttemp_f: %s (oldtemp: %s)" % (counter, dsname[cnta], temp_f, last_temp_st[tmpds]))
-             r = requests.put(endp_url, headers=headers)
-             last_temp_st[tmpds] = temp_f
+          if ( lower_submit_limit <= temp_f <= upper_submit_limit ):
+             if ( sendto_smartthings and abs(round(temp_f, 2) - round(last_temp_st[tmpds], 2)) > 0.18 ):
+                logging.debug ("Endpoint submit URL: %s" % (endp_url))
+                logging.info ("Sending to Smartthings (Cycle %s): dsname: %s\ttemp_f: %s (oldtemp: %s)" % (counter, dsname[cnta], temp_f, last_temp_st[tmpds]))
+                r = requests.put(endp_url, headers=headers)
+                last_temp_st[tmpds] = temp_f
 
-          if ( sendto_influxdb and round(temp_f, 2) != round(last_temp_influx[tmpds], 2)):
-             influxdb(counter, temp_f, dsname[cnta], last_temp_influx[tmpds])
-             last_temp_influx[tmpds] = temp_f
+             if ( sendto_influxdb and round(cur_temp[tmpds], 2) != round(last_temp_influx[tmpds], 2)):
+                logging.debug("\n\ncur_temp DICT:")
+                logging.debug(cur_temp)
+                if dsid[1] in cur_temp:
+                  logging.debug("\t\t\tSolar Return temp: %s" % cur_temp[dsid[1]])
+                if dsid[0] in cur_temp:
+                  logging.debug("\t\t\tSolar Lead temp:  %s " % cur_temp[dsid[0]])
+                logging.debug("\n\n")
+                if (dsid[1] in cur_temp and dsid[0] in cur_temp):
+                  solar_temp_diff = cur_temp[dsid[1]] - cur_temp[dsid[0]]
+
+                influxdb(counter, cur_temp[tmpds], dsname[cnta], last_temp_influx[tmpds], solar_temp_diff)
+                last_temp_influx[tmpds] = cur_temp[tmpds]
 
           cnta += 1
 
        time.sleep(interval)
-
-
 
 get_pump_onoff(nodejs_poolcontroller)
 
