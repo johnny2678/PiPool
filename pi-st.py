@@ -44,15 +44,17 @@ if sendto_influxdb:
    try:
       logging.info("Creating (if not exists) INFLUX DB %s" % (influx_db))
       client.create_database(influx_db)
-   except IOError as e:
+   except:
       logging.error("Unable to create/connect to INFLUX DB %s" % (influx_db))
+      raise
       exit()
 
    try:
       logging.info("Creating (if not exists) retention policy on INFLUX DB %s" % (influx_db))
       client.create_retention_policy(influx_db_retention_policy_name, influx_db_retention_duration, influx_db_retention_replication)
-   except IOError as e:
+   except:
       logging.error("Unable to create INFLUX DB retention policy on DB %s" % (influx_db))
+      raise
       exit()
    
 
@@ -162,7 +164,13 @@ def influxdb(counter, temp_f, sub_dsname, sub_last_temp_influx, sub_solar_temp_d
 def get_pump_onoff(nodejs_poolcontroller):
   if nodejs_poolcontroller:
     url = 'http://192.168.5.31:3000/pump'
-    r = requests.get(url)
+    try:
+      r = requests.get(url)
+    except:
+      raise
+      logging.error("Cannot connect to the Pool Controller (Node.js)... exiting.")
+      exit()
+
     pumps = json.loads(r.text)
     pump_onoff = pumps[1]['power']
 
@@ -175,7 +183,13 @@ def get_pump_onoff(nodejs_poolcontroller):
 def get_pump_mode(nodejs_poolcontroller):
   if nodejs_poolcontroller:
     url = 'http://192.168.5.31:3000/circuit/1'
-    r = requests.get(url)
+    try:
+      r = requests.get(url)
+    except:
+      raise
+      logging.error("Cannot connect to the Pool Controller (Node.js)... exiting.")
+      exit()
+
     resp = json.loads(r.text)
     pumpmode = resp['status']
 
@@ -189,19 +203,25 @@ def get_pump_mode(nodejs_poolcontroller):
       logging.error("Circuit 1 status (SPA) can't be read. Exiting")
       exit()
   else:
-    logging.info("Node.js Pool Controller is not installed - skipping getting pump mode(pool/spa)")
+    logging.info("Node.js Pool Controller is not enabled/installed - skipping getting pump mode(pool/spa)")
 
 def get_pump_rpm(nodejs_poolcontroller):
   if nodejs_poolcontroller:
     url = 'http://192.168.5.31:3000/pump'
-    r = requests.get(url)
+    try:
+      r = requests.get(url)
+    except:
+      raise
+      logging.error("Cannot connect to the Pool Controller (Node.js)... exiting.")
+      exit()
+
     resp = json.loads(r.text)
     pumprpm = resp[1]['rpm']
     pumpwatts = resp[1]['watts']
 
     return pumprpm, pumpwatts
   else:
-    logging.info("Node.js Pool Controller is not installed - skipping getting pump rpm/watts")
+    logging.info("Node.js Pool Controller is not enabled/installed - skipping getting pump rpm/watts")
 
 
 def main():
@@ -270,6 +290,8 @@ def main():
           cnta += 1
 
        time.sleep(interval)
+
+
 
 get_pump_onoff(nodejs_poolcontroller)
 
