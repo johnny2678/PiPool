@@ -200,17 +200,20 @@ def generate_holt_winters(tmpMeasurement):
     raise
     exit()
 
-  if tmpMeasurement == "4hr" or tmpMeasurement == "4hr_tracking":
+  if tmpMeasurement == "4h" or tmpMeasurement == "4h_tracking":
     tmpQueryTime = "2h"
     tmpGroupBy = "30m"
-  elif tmpMeasurement == "2hr" or tmpMeasurement == "2hr_tracking":
-    tmpQueryTime = "1h"
+    tmpNumPeriods = "8"
+  elif tmpMeasurement == "2h" or tmpMeasurement == "2h_tracking":
+    tmpQueryTime = "90m"
     tmpGroupBy = "10m"
+    tmpNumPeriods = "12"
   else:
     tmpQueryTime = "1h"
     tmpGroupBy = "5m"
+    tmpNumPeriods = "12"
 
-  query = 'SELECT holt_winters(mean("temp"),8,0) INTO temp_' + tmpMeasurement + ' FROM "Pool" WHERE "mode" = "pool" AND "sensor" = "Pool - Solar Lead Temp" AND time>now() - ' + tmpQueryTime + ' GROUP BY time(' + tmpGroupBy + ',' + tmpGroupBy + ')'
+  query = 'SELECT holt_winters(mean("temp"),' + tmpNumPeriods + ',0) INTO "temp_' + tmpMeasurement + '" FROM "Pool" WHERE "mode" = \'pool\' AND "sensor" = \'Pool - Solar Lead Temp\' AND time>now() - ' + tmpQueryTime + ' GROUP BY time(' + tmpGroupBy + ',' + tmpGroupBy + ')'
   try:
     logging.debug(" INFLUX: Generating HOLT WINTERS %s temperature projections" % tmpMeasurement)
     result = client.query(query)
@@ -375,7 +378,7 @@ def main():
   logging.info ("Pump start time recorded [%.0d]" % (pumpstarttime))
   logging.info ("  Sleeping while temps normalize")
   if not debug_mode:
-    time.sleep(60)
+    time.sleep(300)
 
   upper_submit_limit = 125
   lower_submit_limit = 45
@@ -446,14 +449,14 @@ def main():
 
           if tmpds == "solarlead":
             logging.debug("Generating Holt Winters predictions (outer)")
-            generate_holt_winters("1hr")
-            generate_holt_winters("2hr")
-            generate_holt_winters("4hr")
+            generate_holt_winters("1h")
+            generate_holt_winters("2h")
+            generate_holt_winters("4h")
             if (curtime - pumpstarttime) / 60 / 60 > pumphour:
               logging.debug("Generating Holt Winters tracking prediction (for forumla tuning)")
-              generate_holt_winters("1hr_tracking")
-              generate_holt_winters("2hr_trakcing")
-              generate_holt_winters("4hr_tracking")
+              generate_holt_winters("1h_tracking")
+              generate_holt_winters("2h_tracking")
+              generate_holt_winters("4h_tracking")
               pumphour += 1
 
     cnt += 1
