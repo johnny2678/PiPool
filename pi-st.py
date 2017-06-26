@@ -29,7 +29,7 @@ sendto_smartthings = True
 sendto_influxdb = True
 
 # True = sleep timers will not fire / False = default settings - sleep timers to normalize temps
-debug_mode = True
+debug_mode = False
 
 if sendto_influxdb:
    influx_host = '192.168.5.133'
@@ -106,7 +106,8 @@ dsname["poolreturn"]  = "Pool - Return Temp"
 dsid = {}
 dsid["solarlead"]     = "800000262ce2"
 dsid["solarreturn"]   = "80000026331f"
-dsid["poolreturn"]    = "0114b80e0bff"
+#dsid["poolreturn"]    = "0114b80e0bff"   -- Replaced with 3M version to reduce wire tension
+dsid["poolreturn"]    = "02161de351ee"
 
 #device Smartthings APP client ID (get from IDE -> App Settings)
 client_id = {}
@@ -366,19 +367,19 @@ def pump_exit_if_off():
   pump_onoff = None
   pump_onoff = get_pump_onoff(nodejs_poolcontroller)
 
-  if pumpstarttime and curtime:
-    runtime = curtime - pumpstarttime
-    logging.debug("Pump has been active since %d (%d runtime)" % (pumpstarttime, runtime))
   if pump_onoff == 0:
     logging.warning("Pump is not running. Exiting.")
     exit()
+  if pumpstarttime and curtime:
+    runtime = curtime - pumpstarttime
+    logging.debug("  Pump has been active since %d (%d runtime)" % (pumpstarttime, runtime))
 
 def main():
   pumphour = 0 
   logging.info ("Pump start time recorded [%.0d]" % (pumpstarttime))
   logging.info ("  Sleeping while temps normalize")
   if not debug_mode:
-    time.sleep(300)
+    time.sleep(600)
 
   upper_submit_limit = 125
   lower_submit_limit = 45
