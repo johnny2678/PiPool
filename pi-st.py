@@ -28,8 +28,19 @@ sendto_smartthings = True
 # Send data to influxDB
 sendto_influxdb = True
 
-# True = sleep timers will not fire / False = default settings - sleep timers to normalize temps
-debug_mode = False
+# increased logging
+debug_mode = True
+
+# increased increased logging
+verbose_mode = False
+
+#RPM baseline test: Run Pump for 3 minutes at every 10 RPMs between the Pump_min and Pump_max
+rpm_baseline = False
+
+#if nodejs_poolcontroller:
+#  from socketIO_client import SocketIO, BaseNamespace
+#  socketIO = SocketIO('192.168.5.31', 3000, BaseNamespace)
+# socketIO.emit('setPumpCommand', 'run', 1, rpm)
 
 if sendto_influxdb:
    influx_host = '192.168.5.133'
@@ -66,31 +77,32 @@ if sendto_influxdb:
 from logging.handlers import RotatingFileHandler
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 
+logging.VERBOSE = 5
+logging.addLevelName(logging.VERBOSE, "VERBOSE")
+logging.Logger.verbose = lambda inst, msg, *args, **kwargs:inst.log(logging.VERBOSE, msg, *args, **kwargs)
+logging.verbose = lambda msg, *args, **kwargs: logging.log(logging.VERBOSE, msg, *args, **kwargs)
+
 logger = logging.getLogger()
-if not debug_mode:
-  logger.setLevel(logging.INFO)
-else:
+if debug_mode:
   logger.setLevel(logging.DEBUG)
+elif verbose_mode:
+  logger.setLevel(logging.VERBOSE)
+else:
+  logger.setLevel(logging.INFO)
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 
 
 fh = RotatingFileHandler('/var/log/PiPool/PiPool.log', maxBytes=100000, backupCount=10)
 
-if not debug_mode:
-  fh.setLevel(logging.INFO)
-else:
+if debug_mode:
   fh.setLevel(logging.DEBUG)
+elif verbose_mode:
+  fh.setLevel(logging.VERBOSE)
+else:
+  fh.setLevel(logging.INFO)
 fh.setFormatter(formatter)
 
-#sh = logging.StreamHandler(stream=sys.stdout)
-#if not debug_mode:
-#  sh.setLevel(logging.INFO)
-#else:
-#  sh.setLevel(logging.DEBUG)
-#sh.setFormatter(formatter)
-
 logger.addHandler(fh)
-#logger.addHandler(sh)
 
 #=================================
 
@@ -122,6 +134,13 @@ ds_token["solarlead"]   = "8c98af31-267e-4704-aa10-fe696f34c041"
 ds_token["solarreturn"] = "bb983ef4-c644-49a8-b560-43f86801627b"
 ds_token["poolreturn"]  = "baa5b0e2-7cc0-493e-bc6a-db928bfa2780"
 
+#st_deviceid = 'jhws1400int'
+st_endpoint = 'https://graph.api.smartthings.com/api/smartapps/installations/b83a222b-628b-4eaa-84c5-38ba013bf5e4'
+st_api_token = 'baa5b0e2-7cc0-493e-bc6a-db928bfa2780'
+st_headers = { 'Authorization' : 'Bearer ' + st_api_token }
+#st_baseurl = st_endpoint + '/update/' + st_deviceid + '/'
+
+
 ### no modifications should be needed below this line
 
 #get smartthings endpoint URLs
@@ -135,61 +154,13 @@ temp_change_per_min={}
 temp_change_per_hour={}
 cur_temp = {}
 cur_temp_timestamp = {}
-temp_at_12pm={}
-temp_at_2pm={}
-temp_at_4pm={}
-temp_at_6pm={}
-old_pump_mode=None
 
 curtime = int(time.mktime(time.localtime()))
 pumpstarttime = curtime
 
 ctime_struct = time.localtime()
-time12pm_struct = (ctime_struct[0], ctime_struct[1], ctime_struct[2], 12, 0, 0, ctime_struct[6], ctime_struct[7], ctime_struct[8])
-time2pm_struct  = (ctime_struct[0], ctime_struct[1], ctime_struct[2], 14, 0, 0, ctime_struct[6], ctime_struct[7], ctime_struct[8])
-time4pm_struct  = (ctime_struct[0], ctime_struct[1], ctime_struct[2], 16, 0, 0, ctime_struct[6], ctime_struct[7], ctime_struct[8])
-time6pm_struct  = (ctime_struct[0], ctime_struct[1], ctime_struct[2], 18, 0, 0, ctime_struct[6], ctime_struct[7], ctime_struct[8])
-time12pm = time.mktime(time12pm_struct)
-time2pm = time.mktime(time2pm_struct)
-time4pm = time.mktime(time4pm_struct)
-time6pm = time.mktime(time6pm_struct)
-
-logging.debug("Today unixtime 12pm: %d" % time12pm)
-logging.debug("Today unixtime 2pm: %d" % time2pm)
-logging.debug("Today unixtime 4pm: %d" % time4pm)
-logging.debug("Today unixtime 6pm: %d" % time6pm)
-
-def get_est_temp_at_hr(tmphr, tmpF, tmpRate, ctime):
-  if (tmphr == 12):
-    esttime = time12pm
-  elif (tmphr == 14):
-    esttime = time2pm
-  elif (tmphr == 16):
-    esttime = time4pm
-  elif (tmphr == 18):
-    esttime = time6pm
-  else:
-    logging.error("Incorrect request for unixtime at %d. Valid values are 12, 14, 16, 18. Exiting..." % (tmphr))
-    exit()
-
-  estTimeDiff = esttime - ctime
-  if (esttime > ctime):
-    estTempF = tmpF + tmpRate * estTimeDiff
-    logging.debug("There are %d seconds between now and %d" % (estTimeDiff, tmphr))
-#    if not (0 < estTempF < estTempF *2):
-#      logging.debug(" Estimated %d pm value of %.3f out of Range. Skipping" % (tmphr, estTempF))
-#      estTempF = None
-  else:
-    estTempF = None
-    logging.debug("There are %d seconds between now and %d. Setting return value to NONE." % (estTimeDiff, tmphr))
-
-  return estTempF
 
 def generate_holt_winters(tmpMeasurement):
-#DROP MEASUREMENT temp_4h
-#SELECT holt_winters(mean("temp"),8,0) INTO "temp_4h" FROM "Pool" WHERE "mode" = 'pool' AND "sensor" = 'Pool - Solar Lead Temp' AND time>now() - 2h GROUP BY time(30m,30m)
-#SELECT holt_winters(mean("temp"),8,0) FROM "Pool" WHERE "mode" = 'pool' AND "sensor" = 'Pool - Solar Lead Temp' AND time>now() - 2h GROUP BY time(30m,30m)
-#SELECT mean("temp") FROM "Pool" WHERE "mode" = 'pool' AND "sensor" = 'Pool - Solar Lead Temp' AND time>now() - 1h GROUP BY time(30m)
 
   query = 'DELETE FROM temp_' + tmpMeasurement
   try:
@@ -214,12 +185,22 @@ def generate_holt_winters(tmpMeasurement):
     tmpGroupBy = "5m"
     tmpNumPeriods = "12"
 
-  query = 'SELECT holt_winters(mean("temp"),' + tmpNumPeriods + ',0) INTO "temp_' + tmpMeasurement + '" FROM "Pool" WHERE "mode" = \'pool\' AND "sensor" = \'Pool - Solar Lead Temp\' AND time>now() - ' + tmpQueryTime + ' GROUP BY time(' + tmpGroupBy + ',' + tmpGroupBy + ')'
+  query = 'SELECT holt_winters(mean("temp"),' + tmpNumPeriods + ',0) INTO "temp_' + tmpMeasurement + '" FROM "PoolStats" WHERE "mode" = \'pool\' AND "sensor" = \'Pool - Solar Lead Temp\' AND time>now() - ' + tmpQueryTime + ' GROUP BY time(' + tmpGroupBy + ',' + tmpGroupBy + ')'
   try:
     logging.debug(" INFLUX: Generating HOLT WINTERS %s temperature projections" % tmpMeasurement)
     result = client.query(query)
     logging.debug(" INFLUX: SUCCESS running query: %s" % query)
-    logging.debug("   INFLUX:{0}".format(result))
+  except:
+    logging.error(" INFLUX: FAIL Unable to execute INFLUX query: %s" % query) 
+    raise
+    exit()
+
+  query = 'select holt_winters from temp_' + tmpMeasurement + ' order by time desc limit 1'
+  try:
+#    logging.debug(" INFLUX: Generating HOLT WINTERS %s temperature projections" % tmpMeasurement)
+    result = client.query(query)
+    logging.debug(" INFLUX: SUCCESS running query: %s" % query)
+    logging.info("   INFLUX:{0}".format(result))
   except:
     logging.error(" INFLUX: FAIL Unable to execute INFLUX query: %s" % query) 
     raise
@@ -246,28 +227,23 @@ def get_st_endpoints():
           uri = endp['uri']
           temp_st_url[tmpds] = uri + ("/update/")
 
-def influxdb(counter, temp_f, sub_dsname, sub_last_temp_influx, sub_solar_temp_diff, sub_temp_change_per_hour, tmp12, tmp14, tmp16, tmp18):
-  logging.info ("Sending to InfluxDB (Cycle %04d): dsname: %s\ttemp_f: %.4f oldtemp: %.4f solar diff: %s temp_change_per_hour(F/hour): %s" % (counter, sub_dsname, temp_f, sub_last_temp_influx, sub_solar_temp_diff, sub_temp_change_per_hour))
-  if not (tmp18 is None):
-    logging.info ("  Est values: 12pm: %s 2pm: %s 4pm: %s 6pm: %s" % (tmp12, tmp14, tmp16, tmp18))
-  pump_mode = get_pump_mode(nodejs_poolcontroller)
+def influxdb(counter, temp_f, sub_dsname, sub_last_temp_influx, sub_solar_temp_diff, sub_temp_change_per_hour, tmpDataStatus, tmpPumpMode, tmptesttag):
+  logging.info ("Sending to InfluxDB (%s Cycle %04d( %s mode ): dsname: %s\ttemp_f: %.4f oldtemp: %.4f solar diff: %s temp_change_per_hour(F/hour): %s" % (tmpDataStatus, counter, tmpPumpMode, sub_dsname, temp_f, sub_last_temp_influx, sub_solar_temp_diff, sub_temp_change_per_hour))
   pump_rpm, pump_watts = get_pump_rpm(nodejs_poolcontroller)
 
   influx_json = [
   {
-    "measurement": "Pool",
+    "measurement": "PoolStats",
     "tags": {
        "sensor": sub_dsname,
-       "mode": pump_mode
+       "mode": tmpPumpMode,
+       "data_status": tmpDataStatus,
+       "test_tag": tmptesttag
     },
     "fields": {
        "temp": temp_f,
        "temp_solar_diff": sub_solar_temp_diff,
        "temp_change_per_hour": sub_temp_change_per_hour,
-       "est_temp_12pm": tmp12,
-       "est_temp_2pm": tmp14,
-       "est_temp_4pm": tmp16,
-       "est_temp_6pm": tmp18,
        "pump_rpm": pump_rpm,
        "pump_watts": pump_watts
     }
@@ -287,17 +263,14 @@ def get_pump_onoff(nodejs_poolcontroller):
       exit()
 
     pumps = json.loads(r.text)
-    pump_onoff = pumps[1]['power']
+    logging.verbose(pumps)
+    logging.verbose(pumps['1'])
+    pump_onoff = pumps['1']['power']
 
     return pump_onoff
 
   else:
     logging.info("Node.js Pool Controller is not installed - skipping getting pump on/off status")
-
-def pump_mode_change(nodejs_poolcontroller, old_pump_mode):
-  pump_mode = get_pump_mode(nodejs_poolcontroller)
-
-  return pump_mode
 
 def get_pump_mode(nodejs_poolcontroller):
   if nodejs_poolcontroller:
@@ -322,14 +295,6 @@ def get_pump_mode(nodejs_poolcontroller):
       logging.error("Circuit 1 status (SPA) can't be read. Exiting")
       exit()
 
-    logging.debug("*** current_pump_mode = %s|old_pump_mode = %s" % (pumpmode, old_pump_mode))
-    if pumpmode != old_pump_mode:
-      if not debug_mode:
-        time.sleep(30)
-      logging.info("Pump mode has changed from %s to %s. Sleeping 30 seconds..." % (old_pump_mode, pumpmode))
-      global old_pump_mode
-      old_pump_mode = pumpmode
-
     return pumpmode
 
   else:
@@ -346,10 +311,29 @@ def get_pump_rpm(nodejs_poolcontroller):
       exit()
 
     resp = json.loads(r.text)
-    pumprpm = resp[1]['rpm']
-    pumpwatts = resp[1]['watts']
+    pumprpm = resp['1']['rpm']
+    pumpwatts = resp['1']['watts']
 
     return pumprpm, pumpwatts
+  else:
+    logging.info("Node.js Pool Controller is not enabled/installed - skipping getting pump rpm/watts")
+
+
+def change_pump_rpm(nodejs_poolcontroller, pump_rpm_speed):
+  if nodejs_poolcontroller:
+    url = 'http://192.168.5.31:3000/pumpCommand/run/pump/1/rpm/'+str(pump_rpm_speed)
+
+#    try:
+#      socketIO.emit('setPumpCommand', 'run', 1, pump_rpm_speed)
+#      logging.info("  ** CHANGE RPM ** : changing RPM to %s" % (pump_rpm_speed))
+    try:
+      r = requests.get(url)
+      logging.info("  ** CHANGE RPM ** : changing RPM to %s using URL %s" % (pump_rpm_speed, url))
+    except:
+      raise
+      logging.error("Cannot connect to the Pool Controller (Node.js - change_pump_rpm)... exiting.")
+      exit()
+
   else:
     logging.info("Node.js Pool Controller is not enabled/installed - skipping getting pump rpm/watts")
 
@@ -362,7 +346,7 @@ def read_temp(tmpds):
 
   return temp_f
 
-def pump_exit_if_off():
+def pump_exit_if_off(ctime):
 
   pump_onoff = None
   pump_onoff = get_pump_onoff(nodejs_poolcontroller)
@@ -370,26 +354,52 @@ def pump_exit_if_off():
   if pump_onoff == 0:
     logging.warning("Pump is not running. Exiting.")
     exit()
-  if pumpstarttime and curtime:
-    runtime = curtime - pumpstarttime
-    logging.debug("  Pump has been active since %d (%d runtime)" % (pumpstarttime, runtime))
+  if pumpstarttime and ctime:
+    runtime = ctime - pumpstarttime
+    logging.debug("  %d: Pump has been active since %d (%d runtime)" % (ctime, pumpstarttime, runtime))
 
 def main():
-  pumphour = 0 
+  pumphour = 1 
+  dataStatus = 'Transitional'
+  old_pump_mode = None
+  pump_mode_time = None
+
+  pump_rpm_min = 2300
+  pump_rpm_max = 3250
+  pump_rpm_period = 300
+
   logging.info ("Pump start time recorded [%.0d]" % (pumpstarttime))
-  logging.info ("  Sleeping while temps normalize")
-  if not debug_mode:
-    time.sleep(600)
 
   upper_submit_limit = 125
   lower_submit_limit = 45
   solar_temp_diff = None
+  pump_rpm_change_time = int(time.mktime(time.localtime()))
+  pump_rpm_speed = pump_rpm_min
 
   get_st_endpoints()
 
   cnt=0
   while (1):
     curtime = int(time.mktime(time.localtime()))
+    pump_mode = get_pump_mode(nodejs_poolcontroller)
+
+    logging.debug("*** current_pump_mode = %s|old_pump_mode = %s" % (pump_mode, old_pump_mode))
+
+    if pump_mode != old_pump_mode:
+      pump_mode_time = curtime
+      old_pump_mode = pump_mode
+      logging.info("Pump mode has changed from %s to %s. Data is Transitional for 60 seconds..." % (old_pump_mode, pump_mode))
+      dataStatus = 'Transitional'
+
+
+    if rpm_baseline and curtime - pump_rpm_change_time > 180 and dataStatus == 'Active' and pump_mode == 'pool':
+      pump_rpm_speed += 10
+      change_pump_rpm(nodejs_poolcontroller, pump_rpm_speed)
+      pump_rpm_change_time = curtime
+      test_tag = 'RPM Baseline'
+    else:
+      test_tag = None
+      logging.debug("  ** Change RPM: baseline not running. |rpm_baseline: %s|curtime: %d|pump_rpm_change_time: %d|dataStatus: %s|pump_mode: %s" % (rpm_baseline, curtime, pump_rpm_change_time, dataStatus, pump_mode))
 
     for tmpds in dsref:
       temp_f = read_temp(dsid[tmpds])
@@ -428,31 +438,29 @@ def main():
           if (temp_change_per_hour[tmpds] > 4 or temp_change_per_hour[tmpds] < -4):
             temp_change_per_hour[tmpds] = None
 
-
-          if (tmpds == "solarlead" and tmpds in last_temp_influx and tmpds in temp_change_per_sec and last_temp_influx[tmpds]<200):
-#            logging.debug("Begin setting est temps")
-            temp_at_12pm[tmpds] = get_est_temp_at_hr(12, last_temp_influx[tmpds], temp_change_per_sec[tmpds], curtime)
-            temp_at_2pm[tmpds] = get_est_temp_at_hr(14, last_temp_influx[tmpds], temp_change_per_sec[tmpds], curtime)
-            temp_at_4pm[tmpds] = get_est_temp_at_hr(16, last_temp_influx[tmpds], temp_change_per_sec[tmpds], curtime)
-            temp_at_6pm[tmpds] = get_est_temp_at_hr(18, last_temp_influx[tmpds], temp_change_per_sec[tmpds], curtime)
-            logging.debug("Est temps for Solar Lead %s %s %s %s" % (temp_at_12pm[tmpds], temp_at_2pm[tmpds], temp_at_4pm[tmpds], temp_at_6pm[tmpds]))
+          if curtime - pumpstarttime > 600 and pump_mode_time + 60 < curtime:
+            logging.debug("Changing/Confirming data status to %s" % dataStatus)
+            dataStatus = 'Active'
+          elif debug_mode:
+            logging.debug("  DEBUG MODE: Changing/Confirming data status to %s" % dataStatus)
+            dataStatus = 'Active'
           else:
-            logging.debug("Setting est temps to NONE")
-            temp_at_12pm[tmpds] = None
-            temp_at_2pm[tmpds]  = None
-            temp_at_4pm[tmpds]  = None
-            temp_at_6pm[tmpds]  = None
+            logging.debug("Data status remains %s" % dataStatus)
 
-
-          influxdb(cnt, cur_temp[tmpds], dsname[tmpds], last_temp_influx[tmpds], solar_temp_diff, temp_change_per_hour[tmpds], temp_at_12pm[tmpds], temp_at_2pm[tmpds], temp_at_4pm[tmpds], temp_at_6pm[tmpds])
+          influxdb(cnt, cur_temp[tmpds], dsname[tmpds], last_temp_influx[tmpds], solar_temp_diff, temp_change_per_hour[tmpds], dataStatus, pump_mode, test_tag)
           last_temp_influx[tmpds] = cur_temp[tmpds]
           last_temp_change_ts[tmpds] = curtime
 
-          if tmpds == "solarlead":
-            logging.debug("Generating Holt Winters predictions (outer)")
-            generate_holt_winters("1h")
-            generate_holt_winters("2h")
-            generate_holt_winters("4h")
+          if tmpds == "solarlead" and pump_mode == "pool":
+            if curtime - pumpstarttime > 600:
+              logging.debug("Generating Holt Winters 1h predictions (outer)")
+              generate_holt_winters("1h")
+            if curtime - pumpstarttime > 900:
+              logging.debug("Generating Holt Winters 2h predictions (outer)")
+              generate_holt_winters("2h")
+            if curtime - pumpstarttime > 1800:
+              logging.debug("Generating Holt Winters 4h predictions (outer)")
+              generate_holt_winters("4h")
             if (curtime - pumpstarttime) / 60 / 60 > pumphour:
               logging.debug("Generating Holt Winters tracking prediction (for forumla tuning)")
               generate_holt_winters("1h_tracking")
@@ -465,11 +473,10 @@ def main():
     time.sleep(15)
 
     if cnt % 4 == 0:
-      pump_exit_if_off()
+      pump_exit_if_off(curtime)
 
 
-pump_exit_if_off()
-#get_st_endpoints()
+pump_exit_if_off(curtime)
 
 main()
 
