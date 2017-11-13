@@ -5,15 +5,47 @@ import sys
 import glob
 import re
 from io import BytesIO
-import json
-import pprint
 import requests
 import time
 import subprocess
 import datetime
 import re
 import logging
+import pprint
+import json
 from st_endpoint import *
+
+def read_config():
+  with open('/home/pi/PiPool/config.json') as data_file:
+    config = json.loads(data_file.read())
+  print ("reading config from json file")
+#  pprint (config)
+  nodejs_poolcontroller = config["integrations"][0]["poolController"][1]["enabled"]
+  sendto_smartthings = config["integrations"][0]["smartthings"][1]["enabled"]
+  auto_rpm = config["pump_options"][0]["auto_change_pump_rpm"][1]["auto_rpm"]
+#  print ("value returned from sub: %s" % config["script_options"][1]["logging_mode"])
+  if config["script_options"][1]["logging_mode"] == "Debug":
+    debug_mode = True
+    verbose_mode = False
+  elif config["script_options"][1]["logging_mode"] == "Verbose":
+    verbose_mode = True
+    debug_mode = False
+  else:
+    verbose_mode = False
+    debug_mode = False
+  sendto_influxdb = config["integrations"][0]["influxDB"][1]["enabled"]
+  influx_host = config["integrations"][0]["influxDB"][1]["host"]
+  influx_port = config["integrations"][0]["influxDB"][1]["port"]
+  influx_user = config["integrations"][0]["influxDB"][1]["user"]
+  influx_password = config["integrations"][0]["influxDB"][1]["password"]
+  influx_db = config["integrations"][0]["influxDB"][1]["dbname"]
+  influx_db_retention_policy_name = config["integrations"][0]["influxDB"][1]["retention_policy"]
+  influx_db_retention_duration = config["integrations"][0]["influxDB"][1]["retention_duration"]
+  influx_db_retention_replication = config["integrations"][0]["influxDB"][1]["retention_replication"]
+
+  return sendto_smartthings, sendto_influxdb, nodejs_poolcontroller, auto_rpm, debug_mode, verbose_mode, influx_host, influx_port, influx_user, influx_password, influx_db, influx_db_retention_policy_name, influx_db_retention_duration, influx_db_retention_replication
+
+(sendto_smartthings, sendto_influxdb, nodejs_poolcontroller, auto_rpm, debug_mode, verbose_mode, influx_host, influx_port, influx_user, influx_password, influx_db, influx_db_retention_policy_name, influx_db_retention_duration, influx_db_retention_replication) = read_config()
 
 #================================
 # Script Setup
@@ -21,25 +53,25 @@ from st_endpoint import *
 # Should the script check for the nodejs_poolcontroller found here and only run when the pump is running?
 # https://github.com/tagyoureit/nodejs-poolController
 # Set to False if you don't have Intellitouch and the above script reading RS485 commands from the Intellitouch COM port
-nodejs_poolcontroller = True
+#nodejs_poolcontroller = True
 
 # Documentation TBD 
-sendto_smartthings = True
+#sendto_smartthings = True
 
 # Send data to influxDB
-sendto_influxdb = True
+#sendto_influxdb = True
 
 # Pump RPM automation
-auto_rpm = True
+#auto_rpm = True
 
 # increased logging
-debug_mode = True
+#debug_mode = True
 
 # increased increased logging
-verbose_mode = False
+#verbose_mode = False
 
 #RPM baseline test: Run Pump for 3 minutes at every 10 RPMs between the Pump_min and Pump_max
-rpm_baseline = False
+#rpm_baseline = False
 
 #if nodejs_poolcontroller:
 #  from socketIO_client import SocketIO, BaseNamespace
@@ -49,14 +81,14 @@ rpm_baseline = False
 #=====================================
 
 if sendto_influxdb:
-   influx_host = '192.168.5.133'
-   influx_port = 8086
-   influx_user = 'root'
-   influx_password = 'root'
-   influx_db = 'PiPool'
-   influx_db_retention_policy_name = 'PiPool retention'
-   influx_db_retention_duration = '720d'
-   influx_db_retention_replication = 1
+#   influx_host = '192.168.5.133'
+#   influx_port = 8086
+#   influx_user = 'root'
+#   influx_password = 'root'
+#   influx_db = 'PiPool'
+#   influx_db_retention_policy_name = 'PiPool retention'
+#   influx_db_retention_duration = '720d'
+#   influx_db_retention_replication = 1
 
    from influxdb import InfluxDBClient
    client = InfluxDBClient(influx_host, influx_port, influx_user, influx_password, influx_db)
@@ -130,7 +162,7 @@ dsid["poolreturn"]    = "02161de351ee"
 pumprpms = ['2500','2700','2850','3050','3250','3450']
 pumprpm_id = [13,12,14,15,16,4]
 
-rpm_change_mode = 'aggressive'
+rpm_change_mode = 'conservative'
 
 temp_diff_ma = {
   'aggressive'  : 20,
@@ -166,6 +198,12 @@ top_rpm_offset = {
   'aggressive'  : 0,
   'balanced'    : 1,
   'conservative': 2
+}
+
+bottom_rpm_offset = {
+  'aggressive'  : 2,
+  'balanced'    : 1,
+  'conservative': 0
 }
 
 
@@ -249,7 +287,7 @@ def initialize_vars():
     last_temp_change_ts[tmpds]=999999.99
     temp_change_per_hour[tmpds]=999999.99
 
-def influxdb(counter, temp_f, sub_dsname, sub_last_temp_influx, sub_solar_temp_diff, sub_temp_change_per_hour, tmpDataStatus, tmpPumpMode, tmptesttag):
+def influxdb(counter, temp_f, sub_dsname, sub_last_temp_influx, sub_solar_temp_diff, sub_temp_change_per_hour, tmpDataStatus, tmpPumpMode):
 ## horrible coding - couldn't figure out how to shorten the logging string for variables below when they are [None]
 ## had to create separate strings for logging so floats/None could still be passed to Influx
   if sub_solar_temp_diff is not None and sub_solar_temp_diff != 0:
@@ -282,8 +320,7 @@ def influxdb(counter, temp_f, sub_dsname, sub_last_temp_influx, sub_solar_temp_d
     "tags": {
        "sensor": sub_dsname,
        "mode": tmpPumpMode,
-       "data_status": tmpDataStatus,
-       "test_tag": tmptesttag
+       "data_status": tmpDataStatus
     },
     "fields": {
        "temp": temp_f,
@@ -322,7 +359,8 @@ def get_temp_diff_ma(tmpcnt):
 
 def get_pump_onoff(nodejs_poolcontroller):
   if nodejs_poolcontroller:
-    url = 'http://192.168.5.31:3000/pump'
+#    url = 'http://192.168.5.31:3000/pump'
+    url = 'http://192.168.5.31:3000/circuit/6'
     try:
       r = requests.get(url)
     except:
@@ -332,8 +370,9 @@ def get_pump_onoff(nodejs_poolcontroller):
 
     pumps = json.loads(r.text)
     logging.verbose(pumps)
-    logging.verbose(pumps['1'])
-    pump_onoff = pumps['1']['power']
+    logging.verbose(pumps['status'])
+#    pump_onoff = pumps['1']['power']
+    pump_onoff = pumps['status']
 
     return pump_onoff
 
@@ -403,7 +442,7 @@ def change_pump_rpm(nodejs_poolcontroller, pump_rpm_speed_step, pump_rpm_action)
           logging.debug("Circuit %s(%s) status = OFF - no action needed" % (pumprpms[tmpcnt],tmpcircuit))
         elif circuitstatus == 1:
           active_speed_step = tmpcnt
-          if ((pump_rpm_action == "increase" and tmpcnt != len(pumprpms)-1) or (pump_rpm_action == "decrease" and tmpcnt != 0 )):
+          if (pump_rpm_action == None or (pump_rpm_action == "increase" and tmpcnt != len(pumprpms) - top_rpm_offset[rpm_change_mode] - 1) or (pump_rpm_action == "decrease" and tmpcnt != bottom_rpm_offset[rpm_change_mode] -1 )):
             logging.info("Circuit %s(%s) status = ON - toggling to OFF" % (pumprpms[tmpcnt],tmpcircuit))
             circuittoggle = toggle_circuit(tmpcnt)
 
@@ -436,7 +475,9 @@ def change_pump_rpm(nodejs_poolcontroller, pump_rpm_speed_step, pump_rpm_action)
         logging.error("Invalid pump rpm action: (%s). Exiting..." % pump_rpm_action)
         exit()
 
-      if active_speed_step != prev_speed_step and active_speed_step != -1:
+#      if active_speed_step != prev_speed_step and active_speed_step != -1:
+      if active_speed_step != prev_speed_step:
+        logging.debug("    RPM CHANGE: The current speed step (%s) doesn't equal the previous speed step (%s)" % (active_speed_step, prev_speed_step))
         logging.debug("    RPM CHANGE: %s requested. Setting RPM to %s(%s)" % (pump_rpm_action, pumprpms[active_speed_step], pumprpm_id[active_speed_step]))
         circuittoggle = toggle_circuit(active_speed_step)
 
@@ -477,7 +518,7 @@ def read_temp(tmpds):
   return temp_f
 
 def pump_exit_if_off(ctime):
-  pump_onoff = None
+#  pump_onoff = None
   pump_onoff = get_pump_onoff(nodejs_poolcontroller)
 
   if pump_onoff == 0:
@@ -486,9 +527,9 @@ def pump_exit_if_off(ctime):
       cnt 
     except:
       logging.debug("Pump cycle count is not set so exiting without checking circuit status")
-    else:
-      active_speed_step = change_pump_rpm(nodejs_poolcontroller, None, None)
+#    else:
   
+    active_speed_step = change_pump_rpm(nodejs_poolcontroller, None, None)
     exit()
 
   if pumpstarttime and ctime:
@@ -535,14 +576,14 @@ def main():
     else:
       logging.verbose("*** current_pump_mode = %s|old_pump_mode = %s" % (pump_mode, old_pump_mode))
 
-    if rpm_baseline and curtime - pump_rpm_change_time > 180 and dataStatus == 'Active' and pump_mode == 'pool':
-      pump_rpm_speed += 10
-      pump_rpm_change_time = curtime
-      test_tag = 'RPM Baseline'
-      logging.debug("  ** Change RPM: baseline running. |rpm_baseline: %s|curtime: %d|pump_rpm_change_time: %d|dataStatus: %s|pump_mode: %s" % (rpm_baseline, curtime, pump_rpm_change_time, dataStatus, pump_mode))
-    else:
-      test_tag = None
-      logging.verbose("  ** Change RPM: baseline not running. |rpm_baseline: %s|curtime: %d|pump_rpm_change_time: %d|dataStatus: %s|pump_mode: %s" % (rpm_baseline, curtime, pump_rpm_change_time, dataStatus, pump_mode))
+#    if rpm_baseline and curtime - pump_rpm_change_time > 180 and dataStatus == 'Active' and pump_mode == 'pool':
+#      pump_rpm_speed += 10
+#      pump_rpm_change_time = curtime
+#      test_tag = 'RPM Baseline'
+#      logging.debug("  ** Change RPM: baseline running. |rpm_baseline: %s|curtime: %d|pump_rpm_change_time: %d|dataStatus: %s|pump_mode: %s" % (rpm_baseline, curtime, pump_rpm_change_time, dataStatus, pump_mode))
+#    else:
+#      test_tag = None
+#      logging.verbose("  ** Change RPM: baseline not running. |rpm_baseline: %s|curtime: %d|pump_rpm_change_time: %d|dataStatus: %s|pump_mode: %s" % (rpm_baseline, curtime, pump_rpm_change_time, dataStatus, pump_mode))
 
     for tmpds in dsref:
       temp_f = read_temp(dsid[tmpds])
@@ -582,7 +623,7 @@ def main():
           else:
             logging.verbose("Data status remains %s" % dataStatus)
 
-          influxdb(cnt, cur_temp[tmpds], dsname[tmpds], last_temp_influx[tmpds], solar_temp_diff, temp_change_per_hour[tmpds], dataStatus, pump_mode, test_tag)
+          influxdb(cnt, cur_temp[tmpds], dsname[tmpds], last_temp_influx[tmpds], solar_temp_diff, temp_change_per_hour[tmpds], dataStatus, pump_mode)
           last_temp_influx[tmpds] = cur_temp[tmpds]
           last_temp_change_ts[tmpds] = curtime
 
@@ -607,25 +648,26 @@ def main():
     # Change RPM speed based on temperature differences
     pump_rpm_speed_step = None
     if auto_rpm and solar_prime_active == "false" and dataStatus == "Active" and pump_mode == "pool" and active_speed_step <= len(pumprpms)-1 and cnt > cnt_offset:
-      if cur_temp['solarlead'] < 87 and active_speed_step <= len(pumprpms)-1:
+      logging.debug("  **** current temp: %s current speed step: %s len(pumprpms): %s top_rpm_offset[%s]: %s:" % (cur_temp['solarlead'], active_speed_step, len(pumprpms), rpm_change_mode, top_rpm_offset[rpm_change_mode]))
+      if cur_temp['solarlead'] < 87 and active_speed_step <= len(pumprpms) - top_rpm_offset[rpm_change_mode]:
           rpm_change_elapsed_sec = curtime - pump_rpm_change_time
           if rpm_change_elapsed_sec > pump_rpm_period:
             logging.debug("  Criteria for rpm change met. Checking solar_temp_diff: %s" % (solar_temp_diff_ma))
             if solar_temp_diff_ma >= temp_diff_ub[rpm_change_mode]:
               logging.info("    Temp diff above threshold of %s; increasing RPM" % temp_diff_ub[rpm_change_mode])
-              active_speed_step = change_pump_rpm(nodejs_poolcontroller, pump_rpm_speed_step, "increase")
+              active_speed_step = change_pump_rpm(nodejs_poolcontroller, None, "increase")
               pump_rpm_change_time = curtime
             elif solar_temp_diff_ma < temp_diff_lb[rpm_change_mode]:
               logging.info("    Temp diff below threshold of %s; decreasing RPM" % temp_diff_lb[rpm_change_mode])
-              active_speed_step = change_pump_rpm(nodejs_poolcontroller, pump_rpm_speed_step, "decrease")
+              active_speed_step = change_pump_rpm(nodejs_poolcontroller, None, "decrease")
               pump_rpm_change_time = curtime
             else:
               logging.debug("    NO RPM CHANGE: Temp diff between %s range of %s and %s." % (rpm_change_mode, temp_diff_lb[rpm_change_mode], temp_diff_ub[rpm_change_mode]))
           else:
             logging.debug ("    NO RPM CHANGE: Current RPM will remain active for %d seconds (%d seconds elapsed)" % (pump_rpm_period, rpm_change_elapsed_sec))
-      elif cur_temp['solarlead'] >= 87 and active_speed_step != 0:
+      elif cur_temp['solarlead'] >= 87 and active_speed_step >= bottom_rpm_offset[rpm_change_mode]:
         logging.debug ("    RPM CHANGE - reducing RPMs - pool is at or above comfort level: %s (expected <87): " % cur_temp['solarlead'])
-        active_speed_step = change_pump_rpm(nodejs_poolcontroller, pump_rpm_speed_step, "decrease")
+        active_speed_step = change_pump_rpm(nodejs_poolcontroller, None, "decrease")
       else:
         logging.debug ("    NO RPM CHANGE: Pool is above comfort level: %s (expected <87), and Pump RPMs are at minimum." % cur_temp['solarlead'])
     else:
@@ -670,11 +712,9 @@ def main():
     
     time.sleep(15)
 
-    if cnt % 4 == 0:
-      pump_exit_if_off(curtime)
-
+#    if cnt % 4 == 0:
+    pump_exit_if_off(curtime)
 
 pump_exit_if_off(curtime)
-
 main()
 
