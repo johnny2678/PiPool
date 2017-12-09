@@ -13,17 +13,15 @@ import re
 import logging
 import pprint
 import json
-from st_endpoint import *
+#from st_endpoint import *
 
 def read_config():
   with open('/home/pi/PiPool/config.json') as data_file:
     config = json.loads(data_file.read())
   print ("reading config from json file")
-#  pprint (config)
   nodejs_poolcontroller = config["integrations"][0]["poolController"][1]["enabled"]
   sendto_smartthings = config["integrations"][0]["smartthings"][1]["enabled"]
   auto_rpm = config["pump_options"][0]["auto_change_pump_rpm"][1]["auto_rpm"]
-#  print ("value returned from sub: %s" % config["script_options"][1]["logging_mode"])
   if config["script_options"][1]["logging_mode"] == "Debug":
     debug_mode = True
     verbose_mode = False
@@ -42,53 +40,21 @@ def read_config():
   influx_db_retention_policy_name = config["integrations"][0]["influxDB"][1]["retention_policy"]
   influx_db_retention_duration = config["integrations"][0]["influxDB"][1]["retention_duration"]
   influx_db_retention_replication = config["integrations"][0]["influxDB"][1]["retention_replication"]
+  st_endpoint = config["integrations"][0]["smartthings"][1]["endpoint"]
+  st_api_token = config["integrations"][0]["smartthings"][1]["api_token"]
+  pump_base_rpm = config["pump_options"][0]["energy_baseline"][1]["pump_base_rpm"]
+  pump_base_watts = config["pump_options"][0]["energy_baseline"][1]["pump_base_watts"]
+  cents_per_kWh = config["pump_options"][0]["energy_baseline"][1]["cents_per_kWh"]
+  pad_energy_usage = config["pump_options"][0]["energy_baseline"][1]["pad_energy_usage"]
+  pad_energy_start_hour = config["pump_options"][0]["energy_baseline"][1]["pad_energy_start_hour"]
+  pad_energy_stop_hour = config["pump_options"][0]["energy_baseline"][1]["pad_energy_stop_hour"]
 
-  return sendto_smartthings, sendto_influxdb, nodejs_poolcontroller, auto_rpm, debug_mode, verbose_mode, influx_host, influx_port, influx_user, influx_password, influx_db, influx_db_retention_policy_name, influx_db_retention_duration, influx_db_retention_replication
+  return pad_energy_usage, pad_energy_start_hour, pad_energy_stop_hour, pump_base_rpm, pump_base_watts, cents_per_kWh, st_endpoint, st_api_token, sendto_smartthings, sendto_influxdb, nodejs_poolcontroller, auto_rpm, debug_mode, verbose_mode, influx_host, influx_port, influx_user, influx_password, influx_db, influx_db_retention_policy_name, influx_db_retention_duration, influx_db_retention_replication
 
-(sendto_smartthings, sendto_influxdb, nodejs_poolcontroller, auto_rpm, debug_mode, verbose_mode, influx_host, influx_port, influx_user, influx_password, influx_db, influx_db_retention_policy_name, influx_db_retention_duration, influx_db_retention_replication) = read_config()
-
-#================================
-# Script Setup
-#
-# Should the script check for the nodejs_poolcontroller found here and only run when the pump is running?
-# https://github.com/tagyoureit/nodejs-poolController
-# Set to False if you don't have Intellitouch and the above script reading RS485 commands from the Intellitouch COM port
-#nodejs_poolcontroller = True
-
-# Documentation TBD 
-#sendto_smartthings = True
-
-# Send data to influxDB
-#sendto_influxdb = True
-
-# Pump RPM automation
-#auto_rpm = True
-
-# increased logging
-#debug_mode = True
-
-# increased increased logging
-#verbose_mode = False
-
-#RPM baseline test: Run Pump for 3 minutes at every 10 RPMs between the Pump_min and Pump_max
-#rpm_baseline = False
-
-#if nodejs_poolcontroller:
-#  from socketIO_client import SocketIO, BaseNamespace
-#  socketIO = SocketIO('192.168.5.31', 3000, BaseNamespace)
-# socketIO.emit('setPumpCommand', 'run', 1, rpm)
+(pad_energy_usage, pad_energy_start_hour, pad_energy_stop_hour, pump_base_rpm, pump_base_watts, cents_per_kWh, st_endpoint, st_api_token, sendto_smartthings, sendto_influxdb, nodejs_poolcontroller, auto_rpm, debug_mode, verbose_mode, influx_host, influx_port, influx_user, influx_password, influx_db, influx_db_retention_policy_name, influx_db_retention_duration, influx_db_retention_replication) = read_config()
 
 #=====================================
-
 if sendto_influxdb:
-#   influx_host = '192.168.5.133'
-#   influx_port = 8086
-#   influx_user = 'root'
-#   influx_password = 'root'
-#   influx_db = 'PiPool'
-#   influx_db_retention_policy_name = 'PiPool retention'
-#   influx_db_retention_duration = '720d'
-#   influx_db_retention_replication = 1
 
    from influxdb import InfluxDBClient
    client = InfluxDBClient(influx_host, influx_port, influx_user, influx_password, influx_db)
@@ -159,7 +125,7 @@ dsid["solarlead"]     = "800000262ce2"
 dsid["solarreturn"]   = "80000026331f"
 dsid["poolreturn"]    = "02161de351ee"
 
-pumprpms = ['2500','2700','2850','3050','3250','3450']
+pumprpms = ['Pool Lowest','Pool Lower','Pool Low','Pool High','Pool Higher','Pool Highest']
 pumprpm_id = [13,12,14,15,16,4]
 
 rpm_change_mode = 'conservative'
@@ -228,11 +194,15 @@ curtime = int(time.mktime(time.localtime()))
 pumpstarttime = curtime
 
 ctime_struct = time.localtime()
+cnt = 0
 
 if debug_mode or verbose_mode:
   cnt_offset = 5
 else:
   cnt_offset = 25
+
+if auto_rpm == "False":
+  auto_rpm = None
 
 def generate_holt_winters(tmpMeasurement):
 
@@ -287,7 +257,7 @@ def initialize_vars():
     last_temp_change_ts[tmpds]=999999.99
     temp_change_per_hour[tmpds]=999999.99
 
-def influxdb(counter, temp_f, sub_dsname, sub_last_temp_influx, sub_solar_temp_diff, sub_temp_change_per_hour, tmpDataStatus, tmpPumpMode):
+def influxdb(counter, temp_f, sub_dsname, sub_last_temp_influx, sub_solar_temp_diff, sub_temp_change_per_hour, tmpDataStatus, tmpPumpMode, tmpPumpBaseRPM, tmpPumpBaseWatts):
 ## horrible coding - couldn't figure out how to shorten the logging string for variables below when they are [None]
 ## had to create separate strings for logging so floats/None could still be passed to Influx
   if sub_solar_temp_diff is not None and sub_solar_temp_diff != 0:
@@ -311,7 +281,6 @@ def influxdb(counter, temp_f, sub_dsname, sub_last_temp_influx, sub_solar_temp_d
 ## end horrible coding
 
   logging.info ("Sending to InfluxDB (%s Cycle %04d( %s mode ): dsname: %s\ttemp_f: %.4f oldtemp: %.4f solar diff: %s temp_change_per_hour(F/hour): %s" % (tmpDataStatus, counter, tmpPumpMode, sub_dsname, temp_f, sub_last_temp_influx, sub_sub_solar_temp_diff, sub_sub_temp_change_per_hour))
-#  logging.info ("Sending to InfluxDB (%s Cycle %04d( %s mode ): dsname: %s\ttemp_f: %.4f oldtemp: %.4f solar diff: %s temp_change_per_hour(F/hour): %s" % (tmpDataStatus, counter, tmpPumpMode, sub_dsname, temp_f, sub_last_temp_influx, sub_solar_temp_diff, sub_temp_change_per_hour))
   pump_rpm, pump_watts = get_pump_rpm(nodejs_poolcontroller)
 
   influx_json = [
@@ -327,7 +296,9 @@ def influxdb(counter, temp_f, sub_dsname, sub_last_temp_influx, sub_solar_temp_d
        "temp_solar_diff": sub_solar_temp_diff,
        "temp_change_per_hour": sub_temp_change_per_hour,
        "pump_rpm": pump_rpm,
-       "pump_watts": pump_watts
+       "pump_watts": pump_watts,
+       "pump_base_rpm": tmpPumpBaseRPM,
+       "pump_base_watts": tmpPumpBaseWatts
     }
   }
 ]
@@ -359,8 +330,8 @@ def get_temp_diff_ma(tmpcnt):
 
 def get_pump_onoff(nodejs_poolcontroller):
   if nodejs_poolcontroller:
-#    url = 'http://192.168.5.31:3000/pump'
-    url = 'http://192.168.5.31:3000/circuit/6'
+    url = 'http://192.168.5.31:3000/pump'
+#    url = 'http://192.168.5.31:3000/circuit/6'
     try:
       r = requests.get(url)
     except:
@@ -370,9 +341,10 @@ def get_pump_onoff(nodejs_poolcontroller):
 
     pumps = json.loads(r.text)
     logging.verbose(pumps)
-    logging.verbose(pumps['status'])
-#    pump_onoff = pumps['1']['power']
-    pump_onoff = pumps['status']
+    logging.verbose(pumps['1']['power'])
+#    logging.verbose(pumps['status'])
+    pump_onoff = pumps['1']['power']
+#    pump_onoff = pumps['status']
 
     return pump_onoff
 
@@ -517,19 +489,37 @@ def read_temp(tmpds):
 
   return temp_f
 
-def pump_exit_if_off(ctime):
+def pump_exit_if_off(ctime, tmpcnt):
 #  pump_onoff = None
   pump_onoff = get_pump_onoff(nodejs_poolcontroller)
 
-  if pump_onoff == 0:
+  if nodejs_poolcontroller:
+    url = 'http://192.168.5.31:3000/circuit/6'
+    try:
+      r = requests.get(url)
+    except:
+      raise
+      logging.error("Cannot connect to the Pool Controller (Node.js)... exiting.")
+      exit()
+
+    pumps = json.loads(r.text)
+    logging.verbose(pumps)
+    logging.verbose(pumps['status'])
+    pool_onoff = pumps['status']
+
+  else:
+    logging.warning("Node.js Pool Controller is not installed - skipping getting pump on/off status")
+
+
+  if (pump_onoff == 0 or pool_onoff == 0):
     logging.warning("Pump is not running. Exiting.")
     try:
-      cnt 
+      tmpcnt 
     except:
       logging.debug("Pump cycle count is not set so exiting without checking circuit status")
-#    else:
-  
-    active_speed_step = change_pump_rpm(nodejs_poolcontroller, None, None)
+    else:
+      active_speed_step = change_pump_rpm(nodejs_poolcontroller, None, None)
+
     exit()
 
   if pumpstarttime and ctime:
@@ -623,7 +613,7 @@ def main():
           else:
             logging.verbose("Data status remains %s" % dataStatus)
 
-          influxdb(cnt, cur_temp[tmpds], dsname[tmpds], last_temp_influx[tmpds], solar_temp_diff, temp_change_per_hour[tmpds], dataStatus, pump_mode)
+          influxdb(cnt, cur_temp[tmpds], dsname[tmpds], last_temp_influx[tmpds], solar_temp_diff, temp_change_per_hour[tmpds], dataStatus, pump_mode, pump_base_rpm, pump_base_watts)
           last_temp_influx[tmpds] = cur_temp[tmpds]
           last_temp_change_ts[tmpds] = curtime
 
@@ -690,7 +680,7 @@ def main():
         logging.debug ("    temp diff diff   : %.4f" % solar_diff_diff)
         solar_prime_activated_ts = curtime 
         solar_prime_active = "true"
-        active_speed_step = change_pump_rpm(nodejs_poolcontroller, 2, None)
+        active_speed_step = change_pump_rpm(nodejs_poolcontroller, 3, None)
       else:
         logging.debug ("Solar priming NOT active:")
         logging.debug ("    current temp diff: %.4f" % solar_temp_diff)
@@ -713,8 +703,8 @@ def main():
     time.sleep(15)
 
 #    if cnt % 4 == 0:
-    pump_exit_if_off(curtime)
+    pump_exit_if_off(curtime, cnt)
 
-pump_exit_if_off(curtime)
+pump_exit_if_off(curtime, cnt)
 main()
 

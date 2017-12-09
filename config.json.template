@@ -1,0 +1,130 @@
+{  
+   "script_options":[  
+      {  
+         "comment":"Valid values are |Info|Debug|Verbose|"
+      },
+      {  
+         "logging_mode":"Debug"
+      }
+   ],
+   "integrations":[  
+      {  
+         "smartthings":[  
+            {  
+               "comment":"get the endpoint and the api_token from the Smartthings IDE in the app simulator"
+            },
+            {  
+               "enabled":"True",
+               "endpoint":"https://graph.api.smartthings.com/api/smartapps/installations/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+               "api_token":"xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+            }
+         ],
+         "poolController":[  
+            {  
+               "comment":"https://github.com/tagyoureit/nodejs-poolController"
+            },
+            {  
+               "enabled":"True",
+               "host":"192.168.x.x",
+               "port":"3xxx"
+            }
+         ],
+         "influxDB":[  
+            {  
+               "comment":"highly recommended - allows historical and visual analysis through tools like Grafana"
+            },
+            {  
+               "enabled":"True",
+               "host":"192.168.x.x",
+               "port":"8xxx",
+               "user":"user",
+               "password":"pass",
+               "dbname":"enter-dbname",
+               "retention_policy":"PiPool retention",
+               "retention_duration":"720d",
+               "retention_replication":"1"
+            }
+         ]
+      }
+   ],
+   "pump_options":[  
+      {  
+         "auto_change_pump_rpm":[  
+            {  
+               "comment":"Pump RPMs will/will NOT change automatically based on the observed temperatures and the rpm_change_mode"
+            },
+            {  
+               "auto_rpm":"True"
+            }
+         ],
+         "auto_change_pump_rpm_mode":[  
+            {  
+               "comment":"valid values are |conservative|balanced|aggressive"
+            },
+            {  
+               "rpm_change_mode":"conservative"
+            }
+         ]
+      },
+      {  
+         "temp_diff_ma":[  
+            {  
+               "comment":"This is the Moving Average(MA) period to use when calculating the MA between the Solar Lead and the Solar Return.  RPM change will occur when the MA value falls outside the values for temp_diff_lb and temp_diff_ub"
+            },
+            {  
+               "aggressive":20,
+               "balanced":60,
+               "conservative":120
+            }
+         ]
+      },
+      {  
+         "temp_diff_lb":[  
+            {  
+               "comment":"If the temp_diff_ma value rises above this value, Pump RPMs will be increased as long as it is not already at max speed defined by the rpm_change_mode"
+            },
+            {  
+               "aggressive":0.7,
+               "balanced":0.8,
+               "conservative":1.0
+            }
+         ]
+      },
+      {  
+         "temp_diff_ub":[  
+            {  
+               "comment":"If the temp_diff_ma value falls below this value, Pump RPMs will be decreased as long as it is not already at min speed defined by the rpm_change_mode"
+            },
+            {  
+               "aggressive":1.5,
+               "balanced":1.7,
+               "conservative":2.0
+            }
+         ]
+      },
+      {  
+         "top_rpm_offset":[  
+            {  
+               "comment":"The max rpm offset defined by the rpm_change_mode"
+            },
+            {  
+               "aggressive":0,
+               "balanced":1,
+               "conservative":2
+            }
+         ]
+      },
+      {  
+         "bottom_rpm_offset":[  
+            {  
+               "comment":"The min offset defined by the rpm_change_mode"
+            },
+            {  
+               "aggressive":2,
+               "balanced":1,
+               "conservative":0
+            }
+         ]
+      }
+   ]
+}
