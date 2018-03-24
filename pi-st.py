@@ -15,7 +15,7 @@ import pprint
 import json
 #from st_endpoint import *
 
-os.environ['TZ']='UTC'
+#os.environ['TZ']='UTC'
 
 def read_config():
   with open('/home/pi/PiPool/config.json') as data_file:
@@ -88,12 +88,14 @@ logging.Logger.verbose = lambda inst, msg, *args, **kwargs:inst.log(logging.VERB
 logging.verbose = lambda msg, *args, **kwargs: logging.log(logging.VERBOSE, msg, *args, **kwargs)
 
 logger = logging.getLogger()
+#logger.setLevel(logging.VERBOSE)
 if verbose_mode:
   logger.setLevel(logging.VERBOSE)
 elif debug_mode:
   logger.setLevel(logging.DEBUG)
 else:
   logger.setLevel(logging.INFO)
+
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 
 fh_info = RotatingFileHandler('/var/log/PiPool/PiPool.info.log', maxBytes=100000, backupCount=10)
@@ -103,15 +105,6 @@ fh_verbose = RotatingFileHandler('/var/log/PiPool/PiPool.verbose.log', maxBytes=
 fh_info.setLevel(logging.INFO)
 fh_debug.setLevel(logging.DEBUG)
 fh_verbose.setLevel(logging.VERBOSE)
-
-#if verbose_mode:
-#  fh.setLevel(logging.VERBOSE)
-#elif debug_mode:
-#  fh.setLevel(logging.DEBUG)
-#else:
-#  fh.setLevel(logging.INFO)
-
-#fh.setLevel(logging.DEBUG)
 
 fh_info.setFormatter(formatter)
 fh_debug.setFormatter(formatter)
@@ -208,9 +201,9 @@ ctime_struct = time.localtime()
 cnt = 0
 
 if debug_mode or verbose_mode:
-  cnt_offset = 5
+  cnt_offset = 4
 else:
-  cnt_offset = 25
+  cnt_offset = 20
 
 if auto_rpm == "False":
   auto_rpm = None
@@ -326,7 +319,8 @@ def get_temp_diff_ma(tmpcnt):
   if tmpcnt > temp_diff_ma[rpm_change_mode]:
     tmpcnt = temp_diff_ma[rpm_change_mode]
 
-  query = 'SELECT moving_average(mean("temp_solar_diff"), ' + str(tmpcnt) + ') FROM PiPool.autogen.PoolStats WHERE "mode" = \'pool\' AND "data_status" = \'Active\' AND time >= now() - 1h GROUP BY time(5s) fill(previous) ORDER BY time desc LIMIT 1'
+  query = 'SELECT mean("temp") as test FROM "PoolStats" WHERE ("sensor" = \'Pool - Solar Lead Temp\' AND "mode" = \'pool\') AND  time > now() - 10h  GROUP BY time(3m) fill(none) ORDER BY time desc LIMIT 1;'
+  #query = 'SELECT moving_average(mean("temp_solar_diff"), ' + str(tmpcnt) + ') FROM PiPool.autogen.PoolStats WHERE "mode" = \'pool\' AND "data_status" = \'Active\' AND time >= now() - 1h GROUP BY time(5s) fill(previous) ORDER BY time desc LIMIT 1'
   try:
     result = client.query(query)
     logging.verbose(" INFLUX: SUCCESS running query: %s" % query)
@@ -346,39 +340,53 @@ def get_temp_diff_ma(tmpcnt):
   return testma
 
 def get_first_temp():
+  from datetime import datetime
+  from pytz import timezone
 
-  query = 'SELECT mean("temp") as test FROM "PoolStats" WHERE ("sensor" = \'Pool - Solar Lead Temp\' AND "mode" = \'pool\') AND  time > now() - 10h  GROUP BY time(5m) fill(none) ORDER BY time asc LIMIT 1;'
+  query = 'SELECT mean("temp") as test FROM "PoolStats" WHERE ("sensor" = \'Pool - Solar Lead Temp\' AND "mode" = \'pool\') AND  time > now() - 10h  GROUP BY time(4m) fill(none) ORDER BY time asc LIMIT 3;'
   try:
     result = client.query(query)
     logging.verbose(" INFLUX: SUCCESS running query: %s" % query)
     logging.verbose("   INFLUX:{0}".format(result))
-
-    testma = result.raw
-    testma = json.dumps(testma)
-    testma = json.loads(testma)
-    first_temp_of_day = testma["series"][0]["values"][0][1]
-    time_of_first_temp = testma["series"][0]["values"][0][0]
-    time_pattern = '%Y-%m-%dT%H:%M:%SZ'
-    time_of_first_temp = int(time.mktime(time.strptime(time_of_first_temp,time_pattern)))
-
-    logging.verbose("\n\n   INFLUX: first temp of day: %s\nraw json: %s" % (first_temp_of_day,testma))
-
-    if first_temp_of_day > 40:
-      logging.verbose(" First temp of day result is valid.")
-    else:
-      first_temp_of_day = None
-    
+   
   except:
     logging.error(" INFLUX: FAIL Unable to execute INFLUX query: %s" % query) 
     raise
     exit()
 
-  return first_temp_of_day, time_of_first_temp
-#  return first_temp_of_day
+  testma = result.raw
+  testma = json.dumps(testma)
+  testma = json.loads(testma)
+
+  try:
+    first_temp_of_day = testma["series"][0]["values"][2][1]
+    time_of_first_temp = testma["series"][0]["values"][0][0]
+    time_pattern = '%Y-%m-%dT%H:%M:%SZ'
+    os.environ['TZ'] = 'UTC'
+    time_of_first_temp = int(time.mktime(time.strptime(time_of_first_temp,time_pattern)))
+    os.environ['TZ'] = 'America/New_York'
+
+    logging.debug("\n\n   INFLUX: first temp of day: %s\nraw json: %s" % (first_temp_of_day,testma))
+
+    if first_temp_of_day > 40:
+      logging.verbose(" First temp of day result is valid.")
+      first_temp_of_day += 0.0000000001
+    else:
+      first_temp_of_day = None
+  except IndexError:
+    logging.debug("  Error getting first temp of day: %s" % testma)
+    first_temp_of_day = None
+
+
+  if first_temp_of_day:
+    return first_temp_of_day, time_of_first_temp
+  else:
+    return None, time_of_first_temp
 
 def get_last_temp():
 
   query = 'SELECT mean("temp") as test FROM "PoolStats" WHERE ("sensor" = \'Pool - Solar Lead Temp\' AND "mode" = \'pool\')  AND  time > now() - 25h AND time < now() - 10h GROUP BY time(5m) fill(none) ORDER BY time desc LIMIT 1;'
+  #query = 'SELECT mean("temp") as test FROM "PoolStats" WHERE ("sensor" = \'Pool - Solar Lead Temp\' AND "mode" = \'pool\')  AND  time > now() - 24h  GROUP BY time(5m) fill(none) ORDER BY time asc LIMIT 1;'
   try:
     result = client.query(query)
     logging.verbose(" INFLUX: SUCCESS running query: %s" % query)
@@ -402,6 +410,31 @@ def get_last_temp():
     exit()
 
   return last_temp_of_prev_day
+
+def add_baseline_rpm():
+  tsnow = datetime.datetime.now()
+  epnow = datetime.datetime.now().timestamp()
+  ts9 = str(now.year) + '-' + str(now.month) + '-' + str(now.day) + ' 09:00:00'
+  ep9 = int(time.mktime(time.strptime(ts9,'%Y-%m-%d %H:%M:%S')))
+  ts5 = str(now.year) + '-' + str(now.month) + '-' + str(now.day) + ' 17:00:00'
+  ep5 = int(time.mktime(time.strptime(ts5,'%Y-%m-%d %H:%M:%S')))
+
+  if (ep9 > epnow > ep5):
+      influx_json = [
+        {
+          "measurement": "PoolStats",
+          "tags": {
+            "mode": 'OFF'
+          },
+          "fields": {
+            "pump_base_rpm": tmpPumpBaseRPM,
+            "pump_base_watts": tmpPumpBaseWatts
+          }
+        }
+      ]
+        
+  client.write_points(influx_json)
+
 
 def get_pump_onoff(nodejs_poolcontroller):
   if nodejs_poolcontroller:
@@ -663,12 +696,13 @@ def main():
 
       if ( lower_submit_limit <= temp_f <= upper_submit_limit ):
         if ( sendto_smartthings and abs(round(temp_f, 2) - round(last_temp_st[tmpds], 2)) > 0.18 ):
-          logging.debug ("Endpoint submit URL: %s" % (endp_url))
+          logging.verbose ("Endpoint submit URL: %s" % (endp_url))
           logging.info ("Sending to Smartthings (Cycle %04d): dsname: %s\ttemp_f: %.4f (oldtemp: %.4f)" % (cnt, dsname[tmpds], temp_f, last_temp_st[tmpds]))
           r = requests.put(endp_url, headers=st_headers)
           last_temp_st[tmpds] = temp_f
 
         if ( sendto_influxdb and round(cur_temp[tmpds], 2) != round(last_temp_influx[tmpds], 2)):
+#        if ( sendto_influxdb ):
           logging.verbose("\n\ncur_temp DICT:")
           logging.verbose(cur_temp)
 
@@ -776,10 +810,11 @@ def main():
       else:
         logging.debug ("Solar Priming STILL ACTIVE - will remain active for 5 minutes (%d seconds elapsed)" % solar_prime_elapsed_sec)
     
-    if(cnt > 1 and first_temp_of_day is None):
+    if(cnt > 25 and first_temp_of_day is None):
       logging.debug("\n\n** Getting First Temp of Day **")
       (first_temp_of_day, pumpstarttime) = get_first_temp()
-      logging.debug("First temp of day: %.4f at %s\n\n" % (first_temp_of_day, pumpstarttime))
+      if first_temp_of_day:
+        logging.debug("First temp of day: %.4f at %s\n\n" % (first_temp_of_day, pumpstarttime))
 
     if(last_temp_of_prev_day is None):
       logging.debug("\n\n** Getting Last Temp of Yesterday **")
@@ -797,8 +832,8 @@ def main():
       logging.debug("\n  Temp gained today: %.4f\n  Net Temp gained (including overnight loss): %.4f\n" % (daily_temp_gain,net_temp_gain))
       
       running_temp_change_per_hour = daily_temp_gain / ((curtime - pumpstarttime) / 60 / 60)
-      logging.debug("  Running Temp Change per Hour: %.4f\n" % (running_temp_change_per_hour))
-      if (cnt > 100 and running_temp_change_per_hour > 5):
+      logging.debug("  Running Temp Change per Hour: %.2f\n" % (running_temp_change_per_hour))
+      if (cnt < cnt_offset or running_temp_change_per_hour > 5):
           running_temp_change_per_hour = None
 
     last_solar_temp_diff = solar_temp_diff
