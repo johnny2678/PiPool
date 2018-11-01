@@ -17,6 +17,10 @@ import json
 
 #os.environ['TZ']='UTC'
 
+sess = requests.Session()
+adapter = requests.adapters.HTTPAdapter(max_retries=10)
+sess.mount('http://', adapter)
+
 def read_config():
   with open('/home/pi/PiPool/config.json') as data_file:
     config = json.loads(data_file.read())
@@ -65,7 +69,7 @@ def read_config():
 if sendto_influxdb:
 
    from influxdb import InfluxDBClient
-   client = InfluxDBClient(influx_host, influx_port, influx_user, influx_password, influx_db)
+   client = InfluxDBClient(influx_host, influx_port, influx_user, influx_password, influx_db,retries=0)
 
    try:
       logging.info("Creating (if not exists) INFLUX DB %s" % (influx_db))
@@ -484,7 +488,7 @@ def get_pump_mode(nodejs_poolcontroller):
   if nodejs_poolcontroller:
     url = 'http://192.168.5.31:3000/circuit/6'
     try:
-      r = requests.get(url)
+      r = sess.get(url)
     except:
       raise
       logging.error("Cannot connect to the Pool Controller (Node.js)... exiting.")
@@ -505,7 +509,7 @@ def get_pump_mode(nodejs_poolcontroller):
     else:
       url = 'http://192.168.5.31:3000/circuit/1'
       try:
-        r = requests.get(url)
+        r = sess.get(url)
       except:
         raise
         logging.error("Cannot connect to the Pool Controller (Node.js)... exiting.")
@@ -530,7 +534,7 @@ def get_pump_rpm(nodejs_poolcontroller):
   if nodejs_poolcontroller:
     url = 'http://192.168.5.31:3000/pump'
     try:
-      r = requests.get(url)
+      r = sess.get(url)
     except:
       raise
       logging.error("Cannot connect to the Pool Controller (Node.js)... exiting.")
@@ -544,6 +548,23 @@ def get_pump_rpm(nodejs_poolcontroller):
   else:
     logging.info("Node.js Pool Controller is not enabled/installed - skipping getting pump rpm/watts")
 
+def get_swg_status(nodejs_poolcontroller):
+  if nodejs_poolcontroller:
+    url = 'http://192.168.5.31:3000/chlorinator'
+    try:
+      r = sess.get(url)
+    except:
+      raise
+      logging.error("Cannot connect to the Pool Controller (Node.js)... exiting.")
+      exit()
+
+    resp = json.loads(r.text)
+    swg_status = resp['status']
+
+    return swg_status
+  else:
+    logging.info("Node.js Pool Controller is not enabled/installed - skipping getting chlorinator status")
+
 def change_pump_rpm(nodejs_poolcontroller, pump_rpm_speed_step, pump_rpm_action):
   if nodejs_poolcontroller:
     tmpcnt=0
@@ -551,7 +572,7 @@ def change_pump_rpm(nodejs_poolcontroller, pump_rpm_speed_step, pump_rpm_action)
     for tmpcircuit in pumprpm_id:
       url = 'http://192.168.5.31:3000/circuit/'+str(tmpcircuit)
       try:
-        r = requests.get(url)
+        r = sess.get(url)
         logging.verbose("  ** GET CIRCUIT STATUS ** : checking status of circuit %s(%s) using URL %s" % (pumprpms[tmpcnt], tmpcircuit, url))
 
         resp = json.loads(r.text)
@@ -610,7 +631,7 @@ def toggle_circuit(pump_rpm_speed_step):
   try:
     url = 'http://192.168.5.31:3000/circuit/' + str(pumprpm_id[pump_rpm_speed_step]) + '/toggle'
 
-    r = requests.get(url)
+    r = sess.get(url)
     resp = json.loads(r.text)
     circuittoggle = resp['value']
 
@@ -656,7 +677,7 @@ def pump_exit_if_off(ctime, tmpcnt):
     try:
       logging.verbose("Adding Baseline RPM values before exiting. (Outside Sub)")
       add_baseline_rpm()
-    except SystemExit as e:
+    except Exception as e:
       logging.exception("\n\n\nJH SCRIPT ERROR:\n\n")
       logging.error(str(e)+"\n\n")
     exit()
@@ -719,7 +740,7 @@ def main():
       if cnt > 4:
         try:
           active_speed_step = change_pump_rpm(nodejs_poolcontroller, None, None)
-        except SystemExit as e:
+        except Exception as e:
           logging.exception("\n\n\nJH SCRIPT ERROR:\n\n")
           logging.error(str(e)+"\n\n")
     else:
@@ -738,7 +759,7 @@ def main():
           logging.info ("Sending to Smartthings (Cycle %04d): dsname: %s\ttemp_f: %.4f (oldtemp: %.4f)" % (cnt, dsname[tmpds], temp_f, last_temp_st[tmpds]))
           try:
             r = requests.put(endp_url, headers=st_headers)
-          except SystemExit as e:
+          except Exception as e:
             logging.exception("\n\n\nJH SCRIPT ERROR:\n\n")
             logging.error(str(e)+"\n\n")
           last_temp_st[tmpds] = temp_f
@@ -769,7 +790,8 @@ def main():
 
           try:
             influxdb(cnt, cur_temp[tmpds], dsname[tmpds], last_temp_influx[tmpds], solar_temp_diff, temp_change_per_hour[tmpds], dataStatus, pump_mode, pump_base_rpm, pump_base_watts, last_temp_of_prev_day,first_temp_of_day,overnight_temp_loss,daily_temp_gain, net_temp_gain, running_temp_change_per_hour, curtime - prevcurtime)
-          except SystemExit as e:
+          except Exception as e:
+#          except:
             logging.exception("\n\n\nJH SCRIPT ERROR:\n\n")
             logging.error(str(e)+"\n\n")
           last_temp_influx[tmpds] = cur_temp[tmpds]
@@ -779,7 +801,7 @@ def main():
             logging.verbose("\n\n *** Sending usage data even though temp didn't change ***\n\n")
             try:
               influxdb(cnt,None,dsname[tmpds],None,None,None,dataStatus,pump_mode, pump_base_rpm, pump_base_watts,None,None,None,None,None,None, curtime - prevcurtime)
-            except SystemExit as e:
+            except Exception as e:
               logging.exception("\n\n\nJH SCRIPT ERROR:\n\n")
               logging.error(str(e)+"\n\n")
 # Generate Holt-Winters temp predictions
@@ -839,7 +861,6 @@ def main():
     if cnt > 4 and dataStatus == 'Active' and last_solar_temp_diff != solar_temp_diff and solar_prime_active == "false":
       solar_diff_diff = solar_temp_diff - last_solar_temp_diff
       solar_temp_diff_ma = get_temp_diff_ma()
-
       if solar_diff_diff > 2:
         logging.info ("Solar priming ACTIVE:")
         logging.debug ("    current temp diff: %.4f" % solar_temp_diff)
