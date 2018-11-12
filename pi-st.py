@@ -205,51 +205,6 @@ ep9 = int(time.mktime(time.strptime(ts9,'%Y-%m-%d %H:%M:%S')))
 ts5 = str(tsnow.year) + '-' + str(tsnow.month) + '-' + str(tsnow.day) + baseline_day_end
 ep5 = int(time.mktime(time.strptime(ts5,'%Y-%m-%d %H:%M:%S')))
 
-def generate_holt_winters(tmpMeasurement):
-  query = 'DELETE FROM temp_' + tmpMeasurement
-  try:
-    logging.verbose(" INFLUX: deleting from measurement %s" % tmpMeasurement)
-    result = client.query(query)
-    logging.verbose(" INFLUX: SUCCESS running query: %s" % query)
-  except:
-    logging.error(" INFLUX: FAIL Unable to execute INFLUX query: %s" % query) 
-    raise
-    exit()
-
-  if tmpMeasurement == "4h" or tmpMeasurement == "4h_tracking":
-    tmpQueryTime = "2h"
-    tmpGroupBy = "30m"
-    tmpNumPeriods = "8"
-  elif tmpMeasurement == "2h" or tmpMeasurement == "2h_tracking":
-    tmpQueryTime = "90m"
-    tmpGroupBy = "10m"
-    tmpNumPeriods = "12"
-  else:
-    tmpQueryTime = "1h"
-    tmpGroupBy = "5m"
-    tmpNumPeriods = "12"
-
-  query = 'SELECT holt_winters(mean("temp"),' + tmpNumPeriods + ',0) INTO "temp_' + tmpMeasurement + '" FROM "PoolStats" WHERE "mode" = \'pool\' AND "sensor" = \'Pool - Solar Lead Temp\' AND time>now() - ' + tmpQueryTime + ' GROUP BY time(' + tmpGroupBy + ',' + tmpGroupBy + ')'
-  try:
-    logging.verbose(" INFLUX: Generating HOLT WINTERS %s temperature projections" % tmpMeasurement)
-    result = client.query(query)
-    logging.verbose(" INFLUX: SUCCESS running query: %s" % query)
-  except:
-    logging.error(" INFLUX: FAIL Unable to execute INFLUX query: %s" % query) 
-    raise
-    exit()
-
-  query = 'select holt_winters from temp_' + tmpMeasurement + ' order by time desc limit 1'
-  try:
-#    logging.debug(" INFLUX: Generating HOLT WINTERS %s temperature projections" % tmpMeasurement)
-    result = client.query(query)
-    logging.verbose(" INFLUX: SUCCESS running query: %s" % query)
-    logging.verbose("   INFLUX:{0}".format(result))
-  except:
-    logging.error(" INFLUX: FAIL Unable to execute INFLUX query: %s" % query) 
-    raise
-    exit()
-
 def initialize_vars():
   for tmpds in dsref:
     last_temp_st[tmpds]=999999.99
@@ -296,7 +251,8 @@ def influxdb(counter, temp_f, sub_dsname, sub_last_temp_influx, sub_solar_temp_d
       pump_base_rpm = None
       pump_base_incremental_cost = None
 
-    logging.info ("Sending Pool Usage data to InfluxDB(%s Cycle %04d( %s mode ): pump_rpm: %d, pump_watts: %d\n\ttime since last measurement: %d\n\tpump_incremental_cost: %.04f\tpump_base_incremental_cost: %s" % (tmpDataStatus, counter, tmpPumpMode, pump_rpm, pump_watts, tmptimesincelastmeasure, pump_incremental_cost, pump_base_incremental_cost))
+    logging.verbose ("Sending Pool Usage data to InfluxDB(%s Cycle %04d( %s mode ): pump_rpm: %d, pump_watts: %d\n\ttime since last measurement: %d\n\tpump_incremental_cost: %.04f\tpump_base_incremental_cost: %s" % (tmpDataStatus, counter, tmpPumpMode, pump_rpm, pump_watts, tmptimesincelastmeasure, pump_incremental_cost, pump_base_incremental_cost))
+    logging.info ("\n\ttime since last measurement: %d\n" % (tmptimesincelastmeasure))
   else:
     logging.verbose("resetting usage data to avoid dupes\n\n")
     pump_rpm = None
@@ -305,8 +261,8 @@ def influxdb(counter, temp_f, sub_dsname, sub_last_temp_influx, sub_solar_temp_d
     pump_base_incremental_cost = None
 
   if sub_dsname and temp_f and sub_last_temp_influx:
-    logging.info ("Sending Pool Temp data to InfluxDB (%s Cycle %04d( %s mode ): dsname: %s\ttemp_f: %.4f oldtemp: %.4f solar diff: %s temp_change_per_hour(F/hour): %s" % (tmpDataStatus, counter, tmpPumpMode, sub_dsname, temp_f, sub_last_temp_influx, sub_sub_solar_temp_diff, sub_sub_temp_change_per_hour))
-
+    logging.verbose ("Sending Pool Temp data to InfluxDB (%s Cycle %04d( %s mode ): dsname: %s\ttemp_f: %.4f oldtemp: %.4f solar diff: %s temp_change_per_hour(F/hour): %s" % (tmpDataStatus, counter, tmpPumpMode, sub_dsname, temp_f, sub_last_temp_influx, sub_sub_solar_temp_diff, sub_sub_temp_change_per_hour))
+    logging.info ("New Temp recorded for %s:\t%.4f. Last Temp was:\t%.4f." % (sub_dsname, temp_f, sub_last_temp_influx))
   influx_json = [
   {
     "measurement": "PoolStats",
@@ -500,12 +456,6 @@ def get_pump_mode(nodejs_poolcontroller):
     if pumpmode == 1:
       logging.verbose("Circuit 1 status = POOL (ON)")
       pumpmode = 'pool'
-#    elif pumpmode == 1:
-#      logging.verbose("Circuit 1 status = SPA (ON)")
-#      pumpmode = 'spa'
-#    else:
-#      logging.error("Circuit 1 status (SPA) can't be read. Exiting")
-#      exit()
     else:
       url = 'http://192.168.5.31:3000/circuit/1'
       try:
@@ -559,7 +509,7 @@ def get_swg_status(nodejs_poolcontroller):
       exit()
 
     resp = json.loads(r.text)
-    swg_status = resp['status']
+    swg_status = resp['chlorinator']['status']
 
     return swg_status
   else:
@@ -706,6 +656,10 @@ def main():
   pump_rpm_change_time = int(time.mktime(time.localtime()))
   active_speed_step = 0
   solar_temp_diff_ma = 0
+  pump_rpm = 0
+  pump_watts = 0
+  prev_pump_rpm = 0
+  prev_pump_watts = 0
 
   first_temp_of_day = None
   time_of_first_temp = None
@@ -725,6 +679,8 @@ def main():
 
     pump_mode = get_pump_mode(nodejs_poolcontroller)
 
+    logging.info("\n\n\n---------------------- %s %s Cycle %d --------------------------" % (pump_mode,dataStatus,cnt))
+
     if ('solarreturn' in cur_temp and 'solarlead' in cur_temp):
       logging.verbose("\t\t\tSolar Return temp: %.4f" % cur_temp['solarreturn'])
       logging.verbose("\t\t\tSolar Lead temp:  %.4f " % cur_temp['solarlead'])
@@ -732,7 +688,7 @@ def main():
       solar_temp_diff = cur_temp['solarreturn'] - cur_temp['solarlead']
 
     if pump_mode != old_pump_mode:
-      logging.info("Pump mode has changed from %s to %s. Data is Transitional for 60 seconds..." % (old_pump_mode, pump_mode))
+      logging.info("\nPump mode has changed from %s to %s. Data is Transitional for %d seconds..." % (old_pump_mode, pump_mode,pump_rpm_transitional_period))
       pump_mode_time = curtime
       old_pump_mode = pump_mode
       dataStatus = 'Transitional'
@@ -756,7 +712,8 @@ def main():
       if ( lower_submit_limit <= temp_f <= upper_submit_limit ):
         if ( sendto_smartthings and abs(round(temp_f, 2) - round(last_temp_st[tmpds], 2)) > 0.18 ):
           logging.verbose ("Endpoint submit URL: %s" % (endp_url))
-          logging.info ("Sending to Smartthings (Cycle %04d): dsname: %s\ttemp_f: %.4f (oldtemp: %.4f)" % (cnt, dsname[tmpds], temp_f, last_temp_st[tmpds]))
+          logging.verbose ("Sending to Smartthings (Cycle %04d): dsname: %s\ttemp_f: %.4f (oldtemp: %.4f)" % (cnt, dsname[tmpds], temp_f, last_temp_st[tmpds]))
+          logging.info ("New Smartthings Temp recorded for %s:\t%.4f. Last Temp was:\t%.4f.)" % (dsname[tmpds], temp_f, last_temp_st[tmpds]))
           try:
             r = requests.put(endp_url, headers=st_headers)
           except Exception as e:
@@ -764,7 +721,7 @@ def main():
             logging.error(str(e)+"\n\n")
           last_temp_st[tmpds] = temp_f
 
-        if ( sendto_influxdb and round(cur_temp[tmpds], 2) != round(last_temp_influx[tmpds], 2)):
+        if ( sendto_influxdb and (round(cur_temp[tmpds], 2) != round(last_temp_influx[tmpds], 2) or (cnt < 20 and first_temp_of_day == None))):
           logging.verbose("\n\ncur_temp DICT:")
           logging.verbose(cur_temp)
 
@@ -779,21 +736,19 @@ def main():
           if (temp_change_per_hour[tmpds] > 4 or temp_change_per_hour[tmpds] < -4):
             temp_change_per_hour[tmpds] = None
 
+          logging.debug("Checking that curtime(%s) - pumpstarttime(%s) > pump_rpm_intro_period (%s)\n   AND that pump_mode_time (%s) + pump_rpm_transitional_period (%s)< curtime (%s)" % (curtime,pumpstarttime,pump_rpm_intro_period,pump_mode_time,pump_rpm_transitional_period,curtime))
           if curtime - pumpstarttime > pump_rpm_intro_period and pump_mode_time + pump_rpm_transitional_period < curtime:
             logging.verbose("Changing/Confirming data status to %s" % dataStatus)
             dataStatus = 'Active'
-#          elif debug_mode or verbose_mode:
-#            dataStatus = 'Active'
-#            logging.verbose("  Changing/Confirming data status to %s" % dataStatus)
           else:
             logging.verbose("Data status remains %s" % dataStatus)
 
           try:
             influxdb(cnt, cur_temp[tmpds], dsname[tmpds], last_temp_influx[tmpds], solar_temp_diff, temp_change_per_hour[tmpds], dataStatus, pump_mode, pump_base_rpm, pump_base_watts, last_temp_of_prev_day,first_temp_of_day,overnight_temp_loss,daily_temp_gain, net_temp_gain, running_temp_change_per_hour, curtime - prevcurtime)
           except Exception as e:
-#          except:
             logging.exception("\n\n\nJH SCRIPT ERROR:\n\n")
             logging.error(str(e)+"\n\n")
+
           last_temp_influx[tmpds] = cur_temp[tmpds]
           last_temp_change_ts[tmpds] = curtime
         else:
@@ -804,28 +759,47 @@ def main():
             except Exception as e:
               logging.exception("\n\n\nJH SCRIPT ERROR:\n\n")
               logging.error(str(e)+"\n\n")
-# Generate Holt-Winters temp predictions
-        # if tmpds == "solarlead" and pump_mode == "pool":
-        #   if curtime - pumpstarttime > 600:
-        #     logging.verbose("Generating Holt Winters 1h predictions (outer)")
-        #     generate_holt_winters("1h")
-        #   if curtime - pumpstarttime > 900:
-        #     logging.verbose("Generating Holt Winters 2h predictions (outer)")
-        #     generate_holt_winters("2h")
-        #   if curtime - pumpstarttime > 1800:
-        #     logging.verbose("Generating Holt Winters 4h predictions (outer)")
-        #     generate_holt_winters("4h")
-        #   if (curtime - pumpstarttime) / 60 / 60 > pumphour:
-        #     logging.verbose("Generating Holt Winters tracking prediction (for forumla tuning)")
-        #     generate_holt_winters("1h_tracking")
-        #     generate_holt_winters("2h_tracking")
-        #     generate_holt_winters("4h_tracking")
-        #     pumphour += 1
+
+    # Prime system/solar panels when rpm change indicates solar has been turned on OR when Chlorinator detects low flow
+    if cnt > 4 and dataStatus == 'Active' and solar_prime_active == "false":
+      pump_rpm, pump_watts = get_pump_rpm(nodejs_poolcontroller)     
+      swg_status = get_swg_status(nodejs_poolcontroller)
+      solar_diff_diff = solar_temp_diff - last_solar_temp_diff
+      solar_temp_diff_ma = get_temp_diff_ma()
+      if (pump_watts < prev_pump_watts * 0.93 and pump_rpm == prev_pump_rpm) or swg_status.startswith("Low Flow"):
+        logging.info ("Solar priming ACTIVE:")
+        logging.debug ("    current temp diff: %.4f - last temp diff: %.4f =  temp diff diff: %.4f" % (solar_temp_diff, last_solar_temp_diff, solar_diff_diff))
+        logging.debug ("    prev pump rpm    : %s |    current pump rpm   : %s" % (prev_pump_rpm,pump_rpm))
+        logging.debug ("    prev pump watts  : %s |    current pump watts : %s (if current < %s then Solar Priming will activate)" % (prev_pump_watts,pump_watts,prev_pump_watts*.93))
+        logging.debug ("    SWG status       : %s" % swg_status)
+        solar_prime_activated_ts = curtime 
+        solar_prime_active = "true"
+        active_speed_step = change_pump_rpm(nodejs_poolcontroller, 3, None)
+      else:
+        logging.debug ("Solar priming NOT active:")
+        logging.verbose ("    current temp diff: %.4f - last temp diff: %.4f =  temp diff diff: %.4f" % (solar_temp_diff, last_solar_temp_diff, solar_diff_diff))
+        logging.verbose ("    prev pump rpm    : %s |    current pump rpm   : %s" % (prev_pump_rpm,pump_rpm))
+        logging.verbose ("    prev pump watts  : %s |    current pump watts : %s (if current < %s then Solar Priming will activate)" % (prev_pump_watts,pump_watts,prev_pump_watts*.93))       
+        logging.verbose ("    SWG status       : %s" % swg_status)
+        solar_prime_active = "false"
+              
+    elif solar_prime_active == "true":
+      solar_prime_elapsed_sec = curtime - solar_prime_activated_ts
+      if curtime - solar_prime_activated_ts > 300:
+        solar_prime_active = "false"
+        logging.info ("Solar priming has been running for the last %d seconds.  Deactivating" % solar_prime_elapsed_sec)
+        pump_rpm_speed_step = None
+        active_speed_step = change_pump_rpm(nodejs_poolcontroller, pump_rpm_speed_step, None)
+      else:
+        logging.debug ("Solar Priming STILL ACTIVE - will remain active for 5 minutes (%d seconds elapsed)" % solar_prime_elapsed_sec)
+    
+    prev_pump_rpm = pump_rpm
+    prev_pump_watts = pump_watts  
 
     # Change RPM speed based on temperature differences
     pump_rpm_speed_step = None
     if auto_rpm and solar_prime_active == "false" and dataStatus == "Active" and pump_mode == "pool" and active_speed_step <= len(pumprpms)-1 and cnt > cnt_offset:
-      logging.debug("  **** current temp: %s current speed step: %s len(pumprpms): %s top_rpm_offset[%s]: %s bottom_rpm_offset[%s]: %s" % (cur_temp['solarlead'], active_speed_step, len(pumprpms), rpm_change_mode, top_rpm_offset[rpm_change_mode], rpm_change_mode, bottom_rpm_offset[rpm_change_mode]))
+      logging.verbose("  **** current temp: %s current speed step: %s len(pumprpms): %s top_rpm_offset[%s]: %s bottom_rpm_offset[%s]: %s" % (cur_temp['solarlead'], active_speed_step, len(pumprpms), rpm_change_mode, top_rpm_offset[rpm_change_mode], rpm_change_mode, bottom_rpm_offset[rpm_change_mode]))
       if cur_temp['solarlead'] < 87 and active_speed_step <= len(pumprpms) - top_rpm_offset[rpm_change_mode]:
           rpm_change_elapsed_sec = curtime - pump_rpm_change_time
           if rpm_change_elapsed_sec > pump_rpm_change_period:
@@ -845,7 +819,6 @@ def main():
       elif cur_temp['solarlead'] >= 87 and active_speed_step >= bottom_rpm_offset[rpm_change_mode]:
         logging.debug ("    RPM CHANGE - reducing RPMs - pool is at or above comfort level: %s (expected <87): " % cur_temp['solarlead'])
         logging.verbose ("    RPM CHANGE - Active Speed Step (%s) is greater than equal to %s threshold of %s" % (active_speed_step, rpm_change_mode, bottom_rpm_offset[rpm_change_mode]))
-#        active_speed_step = change_pump_rpm(nodejs_poolcontroller, None, "decrease")
         active_speed_step = change_pump_rpm(nodejs_poolcontroller, None, None)
       else:
         logging.debug ("    NO RPM CHANGE: Pool is above comfort level: %s (expected <87), and Pump RPMs are at minimum." % cur_temp['solarlead'])
@@ -855,37 +828,8 @@ def main():
       logging.verbose ("    Data Status: %s" % dataStatus)
       logging.verbose ("    Pump Mode: %s" % pump_mode)
       logging.verbose ("    Cycle Cnt: %s" % cnt)
-      logging.verbose ("    Auto RPM value: %s (expected True)" % auto_rpm)
-
-    # Prime system when temp change indicates solar has been turned on
-    if cnt > 4 and dataStatus == 'Active' and last_solar_temp_diff != solar_temp_diff and solar_prime_active == "false":
-      solar_diff_diff = solar_temp_diff - last_solar_temp_diff
-      solar_temp_diff_ma = get_temp_diff_ma()
-      if solar_diff_diff > 2:
-        logging.info ("Solar priming ACTIVE:")
-        logging.debug ("    current temp diff: %.4f" % solar_temp_diff)
-        logging.debug ("    last temp diff   : %.4f" % last_solar_temp_diff)
-        logging.debug ("    temp diff diff   : %.4f" % solar_diff_diff)
-        solar_prime_activated_ts = curtime 
-        solar_prime_active = "true"
-        active_speed_step = change_pump_rpm(nodejs_poolcontroller, 3, None)
-      else:
-        logging.debug ("Solar priming NOT active:")
-        logging.debug ("    current temp diff: %.4f" % solar_temp_diff)
-        logging.debug ("    last temp diff   : %.4f" % last_solar_temp_diff)
-        logging.debug ("    temp diff diff   : %.4f" % solar_diff_diff)
-        solar_prime_active = "false"
-    elif solar_prime_active == "true":
-      solar_prime_elapsed_sec = curtime - solar_prime_activated_ts
-      if curtime - solar_prime_activated_ts > 300:
-        solar_prime_active = "false"
-        logging.info ("Solar priming has been running for the last %d seconds.  Deactivating" % solar_prime_elapsed_sec)
-        pump_rpm_speed_step = None
-        active_speed_step = change_pump_rpm(nodejs_poolcontroller, pump_rpm_speed_step, None)
-      else:
-        logging.debug ("Solar Priming STILL ACTIVE - will remain active for 5 minutes (%d seconds elapsed)" % solar_prime_elapsed_sec)
+      logging.verbose ("    Auto RPM value: %s (expected True)" % auto_rpm)    
     
-#    if(cnt > 25 and first_temp_of_day is None):
     if((cnt > 25 and first_temp_of_day is None) or cnt == 0):
       logging.debug("\n\n** Getting First Temp of Day **")
       prevpumpstarttime = pumpstarttime
@@ -894,6 +838,8 @@ def main():
         logging.debug("First temp of day: %.4f at %s\n\n" % (first_temp_of_day, pumpstarttime))
       else:
         pumpstarttime = prevpumpstarttime
+        if cnt > 10:
+          first_temp_of_day = cur_temp['solarlead']
 
       if cnt == 0:
         if curtime - pumpstarttime > 300:
