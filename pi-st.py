@@ -766,15 +766,26 @@ def main():
       swg_status = get_swg_status(nodejs_poolcontroller)
       solar_diff_diff = solar_temp_diff - last_solar_temp_diff
       solar_temp_diff_ma = get_temp_diff_ma()
+
       if (pump_watts < prev_pump_watts * 0.93 and pump_rpm == prev_pump_rpm) or swg_status.startswith("Low Flow"):
-        logging.info ("Solar priming ACTIVE:")
-        logging.debug ("    current temp diff: %.4f - last temp diff: %.4f =  temp diff diff: %.4f" % (solar_temp_diff, last_solar_temp_diff, solar_diff_diff))
-        logging.debug ("    prev pump rpm    : %s |    current pump rpm   : %s" % (prev_pump_rpm,pump_rpm))
-        logging.debug ("    prev pump watts  : %s |    current pump watts : %s (if current < %s then Solar Priming will activate)" % (prev_pump_watts,pump_watts,prev_pump_watts*.93))
-        logging.debug ("    SWG status       : %s" % swg_status)
-        solar_prime_activated_ts = curtime 
-        solar_prime_active = "true"
-        active_speed_step = change_pump_rpm(nodejs_poolcontroller, 3, None)
+        tsnow = datetime.datetime.now()
+        epnow = datetime.datetime.now().timestamp()
+        ts5 = str(tsnow.year) + '-' + str(tsnow.month) + '-' + str(tsnow.day) + baseline_day_end
+        ep5 = int(time.mktime(time.strptime(ts5,'%Y-%m-%d %H:%M:%S')))
+        ts9 = str(tsnow.year) + '-' + str(tsnow.month) + '-' + str(tsnow.day) + baseline_day_start
+        ep9 = int(time.mktime(time.strptime(ts9,'%Y-%m-%d %H:%M:%S')))       
+        
+        if (epnow > ep5 or epnow < ep9):
+          logging.info ("Low Flow or Pump watt reduction detected but time is after threshold.  Skipping Solar Priming.")
+        else:
+          logging.info ("Solar priming ACTIVE:")
+          logging.debug ("    current temp diff: %.4f - last temp diff: %.4f =  temp diff diff: %.4f" % (solar_temp_diff, last_solar_temp_diff, solar_diff_diff))
+          logging.debug ("    prev pump rpm    : %s |    current pump rpm   : %s" % (prev_pump_rpm,pump_rpm))
+          logging.debug ("    prev pump watts  : %s |    current pump watts : %s (if current < %s then Solar Priming will activate)" % (prev_pump_watts,pump_watts,prev_pump_watts*.93))
+          logging.debug ("    SWG status       : %s" % swg_status)
+          solar_prime_activated_ts = curtime 
+          solar_prime_active = "true"
+          active_speed_step = change_pump_rpm(nodejs_poolcontroller, 3, None)
       else:
         logging.debug ("Solar priming NOT active:")
         logging.verbose ("    current temp diff: %.4f - last temp diff: %.4f =  temp diff diff: %.4f" % (solar_temp_diff, last_solar_temp_diff, solar_diff_diff))
