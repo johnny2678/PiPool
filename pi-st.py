@@ -13,6 +13,7 @@ import re
 import logging
 import pprint
 import json
+import RPi.GPIO as GPIO
 #from st_endpoint import *
 
 #os.environ['TZ']='UTC'
@@ -135,7 +136,8 @@ dsname["solarreturn"] = "Pool - Solar Return Temp"
 dsname["poolreturn"]  = "Pool - Return Temp"
 
 dsid = {}
-dsid["solarlead"]     = "800000262ce2"
+#dsid["solarlead"]     = "800000262ce2"
+dsid["solarlead"]     = "011621375bee"
 dsid["solarreturn"]   = "80000026331f"
 dsid["poolreturn"]    = "02161de351ee"
 
@@ -174,6 +176,7 @@ logging.verbose ("  st_api_token: %s" % st_api_token)
 st_headers = { 'Authorization' : 'Bearer ' + st_api_token }
 
 last_temp_st={}
+temp_offset={}
 last_temp_influx={}
 last_temp_change_ts={}
 temp_change_per_sec={}
@@ -211,6 +214,10 @@ def initialize_vars():
     last_temp_influx[tmpds]=999999.99
     last_temp_change_ts[tmpds]=999999.99
     temp_change_per_hour[tmpds]=999999.99
+
+  temp_offset['solarlead'] = 0
+  temp_offset['solarreturn'] = -0.788
+  temp_offset['poolreturn'] = 0.338
 
 def influxdb(counter, temp_f, sub_dsname, sub_last_temp_influx, sub_solar_temp_diff, sub_temp_change_per_hour, tmpDataStatus, tmpPumpMode, tmpPumpBaseRPM, tmpPumpBaseWatts,last_temp_of_prev_day,first_temp_of_day,overnight_temp_loss,daily_temp_gain, net_temp_gain, running_temp_change_per_hour, tmptimesincelastmeasure):
 ## had to create separate strings for logging so floats/None could still be passed to Influx
@@ -601,14 +608,24 @@ def toggle_circuit(pump_rpm_speed_step):
   return circuittoggle
 
 def read_temp(tmpds):
+  tmpdir = ('/sys/bus/w1/devices/28-' + dsid[tmpds])
+  if (os.path.isdir(tmpdir) == False):
+    logging.warning("\n\n************\nW1 dir for %s(%s) not found.  Attempting to reset GPIO 17 power\n**************\n\n" % (dsname[tmpds], dsid[tmpds]))
+    GPIO.setmode(GPIO.BCM)
+    GPIO.setup(17, GPIO.OUT)
+    GPIO.output(17, GPIO.LOW)
+    time.sleep(3)
+    GPIO.output(17, GPIO.HIGH)
+    time.sleep(8)
+
   try:
     from w1thermsensor import W1ThermSensor
-    sensor = W1ThermSensor(W1ThermSensor.THERM_SENSOR_DS18B20, tmpds)
+    sensor = W1ThermSensor(W1ThermSensor.THERM_SENSOR_DS18B20, dsid[tmpds])
     temp_f = sensor.get_temperature(W1ThermSensor.DEGREES_F)
   except (SystemExit, KeyboardInterrupt):
     raise
   except Exception:
-    logger.error("Failed to read temperature from %s" % dsname[tmpds], exc_info=True)
+    logger.error("\n\nFailed to read temperature from %s" % dsname[tmpds], exc_info=True)
 
   return temp_f
 
@@ -703,8 +720,8 @@ def main():
       logging.verbose("*** current_pump_mode = %s|old_pump_mode = %s" % (pump_mode, old_pump_mode))
 
     for tmpds in dsref:
-      temp_f = read_temp(dsid[tmpds])
-      cur_temp[tmpds] = temp_f
+      temp_f = read_temp(tmpds) + temp_offset[tmpds]
+      cur_temp[tmpds] = temp_f 
 
       st_baseurl = st_endpoint + '/update/' + dsid[tmpds] + '/'
       endp_url = st_baseurl + ("%.2f/F" % temp_f)
