@@ -17,6 +17,7 @@ import RPi.GPIO as GPIO
 #from st_endpoint import *
 
 #os.environ['TZ']='UTC'
+os.environ['TZ'] = 'America/New_York'
 
 sess = requests.Session()
 adapter = requests.adapters.HTTPAdapter(max_retries=10)
@@ -58,13 +59,15 @@ def read_config():
   pump_base_rpm = config["pump_options"][0]["energy_baseline"][1]["pump_base_rpm"]
   pump_base_watts = config["pump_options"][0]["energy_baseline"][1]["pump_base_watts"]
   cents_per_kWh = config["pump_options"][0]["energy_baseline"][1]["cents_per_kWh"]
-  pad_energy_usage = config["pump_options"][0]["energy_baseline"][1]["pad_energy_usage"]
-  pad_energy_start_hour = config["pump_options"][0]["energy_baseline"][1]["pad_energy_start_hour"]
-  pad_energy_stop_hour = config["pump_options"][0]["energy_baseline"][1]["pad_energy_stop_hour"]
+#  pad_energy_usage = config["pump_options"][0]["energy_baseline"][1]["pad_energy_usage"]
+#  pad_energy_start_hour = config["pump_options"][0]["energy_baseline"][1]["pad_energy_start_hour"]
+#  pad_energy_stop_hour = config["pump_options"][0]["energy_baseline"][1]["pad_energy_stop_hour"]
 
-  return rpm_change_mode, temp_diff_ma, temp_diff_ub, temp_diff_lb, pad_energy_usage, pad_energy_start_hour, pad_energy_stop_hour, pump_base_rpm, pump_base_watts, cents_per_kWh, st_endpoint, st_api_token, sendto_smartthings, sendto_influxdb, nodejs_poolcontroller, auto_rpm, debug_mode, verbose_mode, influx_host, influx_port, influx_user, influx_password, influx_db, influx_db_retention_policy_name, influx_db_retention_duration, influx_db_retention_replication
+#  return rpm_change_mode, temp_diff_ma, temp_diff_ub, temp_diff_lb, pad_energy_usage, pad_energy_start_hour, pad_energy_stop_hour, pump_base_rpm, pump_base_watts, cents_per_kWh, st_endpoint, st_api_token, sendto_smartthings, sendto_influxdb, nodejs_poolcontroller, auto_rpm, debug_mode, verbose_mode, influx_host, influx_port, influx_user, influx_password, influx_db, influx_db_retention_policy_name, influx_db_retention_duration, influx_db_retention_replication
+  return rpm_change_mode, temp_diff_ma, temp_diff_ub, temp_diff_lb, pump_base_rpm, pump_base_watts, cents_per_kWh, st_endpoint, st_api_token, sendto_smartthings, sendto_influxdb, nodejs_poolcontroller, auto_rpm, debug_mode, verbose_mode, influx_host, influx_port, influx_user, influx_password, influx_db, influx_db_retention_policy_name, influx_db_retention_duration, influx_db_retention_replication
 
-(rpm_change_mode, temp_diff_ma, temp_diff_ub, temp_diff_lb,pad_energy_usage, pad_energy_start_hour, pad_energy_stop_hour, pump_base_rpm, pump_base_watts, cents_per_kWh, st_endpoint, st_api_token, sendto_smartthings, sendto_influxdb, nodejs_poolcontroller, auto_rpm, debug_mode, verbose_mode, influx_host, influx_port, influx_user, influx_password, influx_db, influx_db_retention_policy_name, influx_db_retention_duration, influx_db_retention_replication) = read_config()
+#(rpm_change_mode, temp_diff_ma, temp_diff_ub, temp_diff_lb,pad_energy_usage, pad_energy_start_hour, pad_energy_stop_hour, pump_base_rpm, pump_base_watts, cents_per_kWh, st_endpoint, st_api_token, sendto_smartthings, sendto_influxdb, nodejs_poolcontroller, auto_rpm, debug_mode, verbose_mode, influx_host, influx_port, influx_user, influx_password, influx_db, influx_db_retention_policy_name, influx_db_retention_duration, influx_db_retention_replication) = read_config()
+(rpm_change_mode, temp_diff_ma, temp_diff_ub, temp_diff_lb,pump_base_rpm, pump_base_watts, cents_per_kWh, st_endpoint, st_api_token, sendto_smartthings, sendto_influxdb, nodejs_poolcontroller, auto_rpm, debug_mode, verbose_mode, influx_host, influx_port, influx_user, influx_password, influx_db, influx_db_retention_policy_name, influx_db_retention_duration, influx_db_retention_replication) = read_config()
 
 #=====================================
 if sendto_influxdb:
@@ -252,6 +255,7 @@ def influxdb(counter, temp_f, sub_dsname, sub_last_temp_influx, sub_solar_temp_d
 
     logging.verbose("    checking that %s[ts5: %s] > %s[tsnow: %s] (diff %d) > %s[ts9: %s] (diff %d)" % (ep5,ts5,epnow,tsnow, ep5-epnow,ep9, ts9,epnow-ep9))
     if (ep5 > epnow > ep9):
+      logging.verbose("      calculating pump_base_incremental_cost with %d (cents_per_kWh), %d (tmpPumpBaseWatts), and %d (tmptimesincelastmeasure)" % (cents_per_kWh, tmpPumpBaseWatts, tmptimesincelastmeasure))
       pump_base_incremental_cost = cents_per_kWh / 1000 / 60 / 60 * tmpPumpBaseWatts * tmptimesincelastmeasure
     else:
       pump_base_watts = None
@@ -303,7 +307,7 @@ def influxdb(counter, temp_f, sub_dsname, sub_last_temp_influx, sub_solar_temp_d
 def get_temp_diff_ma():
 
   query = 'SELECT moving_average(mean("temp_solar_diff"), ' + str(temp_diff_ma[rpm_change_mode]) + ') FROM PiPool.autogen.PoolStats WHERE "mode" = \'pool\' AND "data_status" = \'Active\' AND time >= now() - 1h GROUP BY time(5s) fill(previous) ORDER BY time desc LIMIT 1'
-  
+
   try:
     result = client.query(query)
     logging.verbose(" INFLUX: SUCCESS running query: %s" % query)
@@ -357,8 +361,11 @@ def get_first_temp():
 #        logging.warning("  2nd attempt failed.  Will retry to get first temp of day next cycle.")
 ##        first_temp_of_day = None
 ##        first_temp_of_day = 80
-      
-    time_of_first_temp = testma["series"][0]["values"][0][0]
+    try:  
+      time_of_first_temp = testma["series"][0]["values"][0][0]
+    except:
+      logging.warning("No data points today.")
+      time_of_first_temp = '2019-07-20T19:22:00Z'
     time_pattern = '%Y-%m-%dT%H:%M:%SZ'
     os.environ['TZ'] = 'UTC'
     time_of_first_temp = int(time.mktime(time.strptime(time_of_first_temp,time_pattern)))
@@ -607,25 +614,23 @@ def toggle_circuit(pump_rpm_speed_step):
 
   return circuittoggle
 
-def read_temp(tmpds):
-  tmpdir = ('/sys/bus/w1/devices/28-' + dsid[tmpds])
-  if (os.path.isdir(tmpdir) == False):
-    logging.warning("\n\n************\nW1 dir for %s(%s) not found.  Attempting to reset GPIO 17 power\n**************\n\n" % (dsname[tmpds], dsid[tmpds]))
-    GPIO.setmode(GPIO.BCM)
-    GPIO.setup(17, GPIO.OUT)
-    GPIO.output(17, GPIO.LOW)
-    time.sleep(3)
-    GPIO.output(17, GPIO.HIGH)
-    time.sleep(8)
+def read_temp(tmpds, lasttemp):
 
-  try:
-    from w1thermsensor import W1ThermSensor
-    sensor = W1ThermSensor(W1ThermSensor.THERM_SENSOR_DS18B20, dsid[tmpds])
-    temp_f = sensor.get_temperature(W1ThermSensor.DEGREES_F)
-  except (SystemExit, KeyboardInterrupt):
-    raise
-  except Exception:
-    logger.error("\n\nFailed to read temperature from %s" % dsname[tmpds], exc_info=True)
+  temp_f = None
+
+  with open('/home/pi/PiPool/temps.json') as json_file:
+    temps = json.loads(json_file.read())
+  
+  for sensor in temps["sensor"]:
+    logging.verbose("checking json entry %s matches script value %s", sensor['dsid'], tmpds)
+    if (str(sensor['dsid'])) == tmpds:
+      try:
+        temp_f = sensor['temp']
+      except:
+        logging.verbose("Unable to read temp for sensor %s" % sensor[dsid])
+
+  if not temp_f:
+    temp_f = lasttemp
 
   return temp_f
 
@@ -691,12 +696,12 @@ def main():
   cnt=0
   while (1):
     curtime = int(time.mktime(time.localtime()))
-    if cnt == 0:
+    if cnt < 3:
       prevcurtime = curtime
 
     pump_mode = get_pump_mode(nodejs_poolcontroller)
 
-    logging.info("\n\n\n---------------------- %s %s Cycle %d --------------------------" % (pump_mode,dataStatus,cnt))
+    logging.info("\n\n\n---------------------- %s %s Cycle %d (%d) --------------------------" % (pump_mode,dataStatus,cnt, curtime))
 
     if ('solarreturn' in cur_temp and 'solarlead' in cur_temp):
       logging.verbose("\t\t\tSolar Return temp: %.4f" % cur_temp['solarreturn'])
@@ -720,7 +725,7 @@ def main():
       logging.verbose("*** current_pump_mode = %s|old_pump_mode = %s" % (pump_mode, old_pump_mode))
 
     for tmpds in dsref:
-      temp_f = read_temp(tmpds) + temp_offset[tmpds]
+      temp_f = read_temp(dsid[tmpds], last_temp_influx[tmpds]) + temp_offset[tmpds]
       cur_temp[tmpds] = temp_f 
 
       st_baseurl = st_endpoint + '/update/' + dsid[tmpds] + '/'
@@ -761,6 +766,7 @@ def main():
             logging.verbose("Data status remains %s" % dataStatus)
 
           try:
+            logging.verbose("\n\n**** curtime:\t%d\n**** prevcurtime:\t%d\n\n" % (curtime, prevcurtime))
             influxdb(cnt, cur_temp[tmpds], dsname[tmpds], last_temp_influx[tmpds], solar_temp_diff, temp_change_per_hour[tmpds], dataStatus, pump_mode, pump_base_rpm, pump_base_watts, last_temp_of_prev_day,first_temp_of_day,overnight_temp_loss,daily_temp_gain, net_temp_gain, running_temp_change_per_hour, curtime - prevcurtime)
           except Exception as e:
             logging.exception("\n\n\nJH SCRIPT ERROR:\n\n")
@@ -912,3 +918,4 @@ except SystemExit as e:
   logging.exception("\n\n\nJH SCRIPT ERROR:\n\n")
   logging.error(str(e)+"\n\n")
 #  raise
+
