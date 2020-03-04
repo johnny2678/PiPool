@@ -69,28 +69,7 @@ def read_config():
 #(rpm_change_mode, temp_diff_ma, temp_diff_ub, temp_diff_lb,pad_energy_usage, pad_energy_start_hour, pad_energy_stop_hour, pump_base_rpm, pump_base_watts, cents_per_kWh, st_endpoint, st_api_token, sendto_smartthings, sendto_influxdb, nodejs_poolcontroller, auto_rpm, debug_mode, verbose_mode, influx_host, influx_port, influx_user, influx_password, influx_db, influx_db_retention_policy_name, influx_db_retention_duration, influx_db_retention_replication) = read_config()
 (rpm_change_mode, temp_diff_ma, temp_diff_ub, temp_diff_lb,pump_base_rpm, pump_base_watts, cents_per_kWh, st_endpoint, st_api_token, sendto_smartthings, sendto_influxdb, nodejs_poolcontroller, auto_rpm, debug_mode, verbose_mode, influx_host, influx_port, influx_user, influx_password, influx_db, influx_db_retention_policy_name, influx_db_retention_duration, influx_db_retention_replication) = read_config()
 
-#=====================================
-if sendto_influxdb:
-
-   from influxdb import InfluxDBClient
-   client = InfluxDBClient(influx_host, influx_port, influx_user, influx_password, influx_db,retries=0)
-
-   try:
-      logging.info("Creating (if not exists) INFLUX DB %s" % (influx_db))
-      client.create_database(influx_db)
-   except:
-      logging.error("Unable to create/connect to INFLUX DB %s" % (influx_db))
-      raise
-      exit()
-
-   try:
-      logging.info("Creating (if not exists) retention policy on INFLUX DB %s" % (influx_db))
-      client.create_retention_policy(influx_db_retention_policy_name, influx_db_retention_duration, influx_db_retention_replication)
-   except:
-      logging.error("Unable to create INFLUX DB retention policy on DB %s" % (influx_db))
-      raise
-      exit()
-   
+  
 #================================
 # Logging
 from logging.handlers import RotatingFileHandler
@@ -277,6 +256,7 @@ def influxdb(counter, temp_f, sub_dsname, sub_last_temp_influx, sub_solar_temp_d
   influx_json = [
   {
     "measurement": "PoolStats",
+    "retention_policy": "autogen",
     "tags": {
        "sensor": sub_dsname,
        "mode": tmpPumpMode,
@@ -330,7 +310,7 @@ def get_first_temp():
   from datetime import datetime
   from pytz import timezone
 
-  query = 'SELECT mean("temp") FROM "PoolStats" WHERE ("sensor" = \'Pool - Solar Lead Temp\' AND "mode" = \'pool\') AND  time > now() - 10h  GROUP BY time(3m) fill(none) ORDER BY time asc LIMIT 4;'
+  query = 'SELECT mean("temp") FROM PiPool.autogen.PoolStats WHERE ("sensor" = \'Pool - Solar Lead Temp\' AND "mode" = \'pool\') AND  time > now() - 10h  GROUP BY time(3m) fill(none) ORDER BY time asc LIMIT 4;'
   try:
     result = client.query(query)
     logging.verbose(" INFLUX: SUCCESS running query: %s" % query)
@@ -394,7 +374,7 @@ def get_first_temp():
       return None, None
 
 def get_last_temp():
-  query = 'SELECT mean("temp") as test FROM "PoolStats" WHERE ("sensor" = \'Pool - Solar Lead Temp\' AND "mode" = \'pool\')  AND  time > now() - 25h AND time < now() - 10h GROUP BY time(5m) fill(none) ORDER BY time desc LIMIT 1;'
+  query = 'SELECT mean("temp") as test FROM PiPool.autogen.PoolStats WHERE ("sensor" = \'Pool - Solar Lead Temp\' AND "mode" = \'pool\')  AND  time > now() - 25h AND time < now() - 10h GROUP BY time(5m) fill(none) ORDER BY time desc LIMIT 1;'
   
   try:
     result = client.query(query)
@@ -440,6 +420,7 @@ def add_baseline_rpm():
     influx_json = [
         {
           "measurement": "PoolStats",
+          "retention_policy": "autogen",
           "tags": {
             "mode": 'OFF'
           },
@@ -618,9 +599,13 @@ def read_temp(tmpds, lasttemp):
 
   temp_f = None
 
-  with open('/home/pi/PiPool/temps.json') as json_file:
-    temps = json.loads(json_file.read())
-  
+  try:
+    with open('/home/pi/PiPool/temps.json') as json_file:
+      temps = json.loads(json_file.read())
+  except:
+    temp_f = lasttemp
+    return temp_f
+    
   for sensor in temps["sensor"]:
     logging.verbose("checking json entry %s matches script value %s", sensor['dsid'], tmpds)
     if (str(sensor['dsid'])) == tmpds:
@@ -912,6 +897,29 @@ def main():
     pump_exit_if_off(curtime, cnt)
 
 pump_exit_if_off(curtime, cnt)
+
+#=====================================
+if sendto_influxdb:
+
+   from influxdb import InfluxDBClient
+   client = InfluxDBClient(influx_host, influx_port, influx_user, influx_password, influx_db,retries=0)
+
+   try:
+      logging.info("Creating (if not exists) INFLUX DB %s" % (influx_db))
+      client.create_database(influx_db)
+   except:
+      logging.error("Unable to create/connect to INFLUX DB %s" % (influx_db))
+      raise
+      exit()
+
+   try:
+      logging.info("Creating (if not exists) retention policy on INFLUX DB %s" % (influx_db))
+      client.create_retention_policy(influx_db_retention_policy_name, influx_db_retention_duration, influx_db_retention_replication)
+   except:
+      logging.error("Unable to create INFLUX DB retention policy on DB %s" % (influx_db))
+      raise
+      exit()
+
 try:
   main()
 except SystemExit as e:

@@ -10,6 +10,11 @@ dsid["solarlead"]     = "011621375bee"
 dsid["solarreturn"]   = "80000026331f"
 dsid["poolreturn"]    = "02161de351ee"
 
+# drok probe #1 - "00000b88396e"
+# drok probe #2 - "00000b885c23"
+# drok probe #3 - "00000b88b7d2"
+# drok probe #4 - "00000b88e5c7"
+
 while(1):
   data = {}
   data['sensor'] = []
