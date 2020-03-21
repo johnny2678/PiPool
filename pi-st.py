@@ -198,12 +198,13 @@ def initialize_vars():
     temp_change_per_hour[tmpds]=999999.99
 
   temp_offset['solarlead'] = 0
-  temp_offset['solarreturn'] = -0.788
-  temp_offset['poolreturn'] = 0.338
+  temp_offset['solarreturn'] = -0.9
+  temp_offset['poolreturn'] = 0.112
 
 def influxdb(counter, temp_f, sub_dsname, sub_last_temp_influx, sub_solar_temp_diff, sub_temp_change_per_hour, tmpDataStatus, tmpPumpMode, tmpPumpBaseRPM, tmpPumpBaseWatts,last_temp_of_prev_day,first_temp_of_day,overnight_temp_loss,daily_temp_gain, net_temp_gain, running_temp_change_per_hour, tmptimesincelastmeasure):
 ## had to create separate strings for logging so floats/None could still be passed to Influx
-  if sub_solar_temp_diff is not None and sub_solar_temp_diff != 0:
+#  if sub_solar_temp_diff is not None and sub_solar_temp_diff != 0:
+  if sub_solar_temp_diff is not None:
     if (sub_solar_temp_diff > 15 or sub_solar_temp_diff < -5):
       sub_solar_temp_diff = None
       sub_sub_solar_temp_diff = None
@@ -252,11 +253,16 @@ def influxdb(counter, temp_f, sub_dsname, sub_last_temp_influx, sub_solar_temp_d
 
   if sub_dsname and temp_f and sub_last_temp_influx:
     logging.verbose ("Sending Pool Temp data to InfluxDB (%s Cycle %04d( %s mode ): dsname: %s\ttemp_f: %.4f oldtemp: %.4f solar diff: %s temp_change_per_hour(F/hour): %s" % (tmpDataStatus, counter, tmpPumpMode, sub_dsname, temp_f, sub_last_temp_influx, sub_sub_solar_temp_diff, sub_sub_temp_change_per_hour))
-    logging.info ("New Temp recorded for %s:\t%.4f. Last Temp was:\t%.4f." % (sub_dsname, temp_f, sub_last_temp_influx))
+    
+    if temp_f != sub_last_temp_influx:
+      logging.info ("New Temp recorded for %s:\t%.4f. Last Temp was:\t%.4f." % (sub_dsname, temp_f, sub_last_temp_influx))
+    else:
+      logging.info ("Temp recorded for %s:\t%.4f." % (sub_dsname, temp_f))
+  
+
   influx_json = [
   {
     "measurement": "PoolStats",
-    "retention_policy": "autogen",
     "tags": {
        "sensor": sub_dsname,
        "mode": tmpPumpMode,
@@ -282,11 +288,11 @@ def influxdb(counter, temp_f, sub_dsname, sub_last_temp_influx, sub_solar_temp_d
   }
 ]
         
-  client.write_points(influx_json)
+  client.write_points(influx_json, retention_policy='pool_live_for_7d')
 
 def get_temp_diff_ma():
 
-  query = 'SELECT moving_average(mean("temp_solar_diff"), ' + str(temp_diff_ma[rpm_change_mode]) + ') FROM PiPool.autogen.PoolStats WHERE "mode" = \'pool\' AND "data_status" = \'Active\' AND time >= now() - 1h GROUP BY time(5s) fill(previous) ORDER BY time desc LIMIT 1'
+  query = 'SELECT moving_average(mean("temp_solar_diff"), ' + str(temp_diff_ma[rpm_change_mode]) + ') FROM PiPool.pool_live_for_7d.PoolStats WHERE "mode" = \'pool\' AND "data_status" = \'Active\' AND time >= now() - 1h GROUP BY time(5s) fill(previous) ORDER BY time desc LIMIT 1'
 
   try:
     result = client.query(query)
@@ -310,7 +316,7 @@ def get_first_temp():
   from datetime import datetime
   from pytz import timezone
 
-  query = 'SELECT mean("temp") FROM PiPool.autogen.PoolStats WHERE ("sensor" = \'Pool - Solar Lead Temp\' AND "mode" = \'pool\') AND  time > now() - 10h  GROUP BY time(3m) fill(none) ORDER BY time asc LIMIT 4;'
+  query = 'SELECT mean("temp") FROM PiPool.pool_live_for_7d.PoolStats WHERE ("sensor" = \'Pool - Solar Lead Temp\' AND "mode" = \'pool\') AND  time > now() - 10h  GROUP BY time(3m) fill(none) ORDER BY time asc LIMIT 4;'
   try:
     result = client.query(query)
     logging.verbose(" INFLUX: SUCCESS running query: %s" % query)
@@ -374,7 +380,7 @@ def get_first_temp():
       return None, None
 
 def get_last_temp():
-  query = 'SELECT mean("temp") as test FROM PiPool.autogen.PoolStats WHERE ("sensor" = \'Pool - Solar Lead Temp\' AND "mode" = \'pool\')  AND  time > now() - 25h AND time < now() - 10h GROUP BY time(5m) fill(none) ORDER BY time desc LIMIT 1;'
+  query = 'SELECT mean("temp") as test FROM PiPool.pool_live_for_7d.PoolStats WHERE ("sensor" = \'Pool - Solar Lead Temp\' AND "mode" = \'pool\')  AND  time > now() - 25h AND time < now() - 10h GROUP BY time(5m) fill(none) ORDER BY time desc LIMIT 1;'
   
   try:
     result = client.query(query)
@@ -420,10 +426,6 @@ def add_baseline_rpm():
     influx_json = [
         {
           "measurement": "PoolStats",
-          "retention_policy": "autogen",
-          "tags": {
-            "mode": 'OFF'
-          },
           "fields": {
             "pump_base_rpm": pump_base_rpm,
             "pump_base_watts": pump_base_watts,
@@ -431,7 +433,7 @@ def add_baseline_rpm():
           }
         }
       ]
-    client.write_points(influx_json)
+    client.write_points(influx_json, retention_policy='pool_live_for_7d')
   else:
     logging.info("Pump is off and time is not between 9AM and 5PM. Exiting.\n\n")        
 
@@ -595,7 +597,7 @@ def toggle_circuit(pump_rpm_speed_step):
 
   return circuittoggle
 
-def read_temp(tmpds, lasttemp):
+def read_temp(tmpds, lasttemp, tempoffset):
 
   temp_f = None
 
@@ -610,7 +612,7 @@ def read_temp(tmpds, lasttemp):
     logging.verbose("checking json entry %s matches script value %s", sensor['dsid'], tmpds)
     if (str(sensor['dsid'])) == tmpds:
       try:
-        temp_f = sensor['temp']
+        temp_f = sensor['temp'] + tempoffset
       except:
         logging.verbose("Unable to read temp for sensor %s" % sensor[dsid])
 
@@ -690,9 +692,11 @@ def main():
 
     if ('solarreturn' in cur_temp and 'solarlead' in cur_temp):
       logging.verbose("\t\t\tSolar Return temp: %.4f" % cur_temp['solarreturn'])
-      logging.verbose("\t\t\tSolar Lead temp:  %.4f " % cur_temp['solarlead'])
+      logging.verbose("\t\t\tSolar Lead temp:   %.4f" % cur_temp['solarlead'])
       logging.verbose("\n\n")
       solar_temp_diff = cur_temp['solarreturn'] - cur_temp['solarlead']
+      logging.verbose("\t\t\tSolar Temp Diff:   %.4f" % solar_temp_diff)
+      logging.verbose("\n\n")
 
     if pump_mode != old_pump_mode:
       logging.info("\nPump mode has changed from %s to %s. Data is Transitional for %d seconds..." % (old_pump_mode, pump_mode,pump_rpm_transitional_period))
@@ -710,7 +714,7 @@ def main():
       logging.verbose("*** current_pump_mode = %s|old_pump_mode = %s" % (pump_mode, old_pump_mode))
 
     for tmpds in dsref:
-      temp_f = read_temp(dsid[tmpds], last_temp_influx[tmpds]) + temp_offset[tmpds]
+      temp_f = read_temp(dsid[tmpds], last_temp_influx[tmpds], temp_offset[tmpds]) 
       cur_temp[tmpds] = temp_f 
 
       st_baseurl = st_endpoint + '/update/' + dsid[tmpds] + '/'
@@ -720,7 +724,7 @@ def main():
         if ( sendto_smartthings and abs(round(temp_f, 2) - round(last_temp_st[tmpds], 2)) > 0.18 ):
           logging.verbose ("Endpoint submit URL: %s" % (endp_url))
           logging.verbose ("Sending to Smartthings (Cycle %04d): dsname: %s\ttemp_f: %.4f (oldtemp: %.4f)" % (cnt, dsname[tmpds], temp_f, last_temp_st[tmpds]))
-          logging.info ("New Smartthings Temp recorded for %s:\t%.4f. Last Temp was:\t%.4f.)" % (dsname[tmpds], temp_f, last_temp_st[tmpds]))
+          logging.info ("New Smartthings Temp recorded for %s:\t%.4f. Last Temp was:\t%.4f." % (dsname[tmpds], temp_f, last_temp_st[tmpds]))
           try:
             r = requests.put(endp_url, headers=st_headers)
           except Exception as e:
@@ -728,7 +732,8 @@ def main():
             logging.error(str(e)+"\n\n")
           last_temp_st[tmpds] = temp_f
 
-        if ( sendto_influxdb and (round(cur_temp[tmpds], 2) != round(last_temp_influx[tmpds], 2) or (cnt < 20 and first_temp_of_day == None))):
+#        if ( sendto_influxdb and (round(cur_temp[tmpds], 2) != round(last_temp_influx[tmpds], 2) or (cnt < 20 and first_temp_of_day == None))):
+        if ( sendto_influxdb or (cnt < 20 and first_temp_of_day == None)):
           logging.verbose("\n\ncur_temp DICT:")
           logging.verbose(cur_temp)
 
@@ -760,6 +765,7 @@ def main():
           last_temp_influx[tmpds] = cur_temp[tmpds]
           last_temp_change_ts[tmpds] = curtime
         else:
+          logging.verbose("\n\n *** Sendto_influxdb value: %r" % sendto_influxdb)
           if tmpds == 'solarlead':
             logging.verbose("\n\n *** Sending usage data even though temp didn't change ***\n\n")
             try:
