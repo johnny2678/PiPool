@@ -46,8 +46,8 @@ while(1):
       'ts': str(tsnow.year) + '-' + str(tsnow.month) + '-' + str(tsnow.day) + ' ' + str(tsnow.hour) + ':' + str(tsnow.minute) + ':' + str(tsnow.second)
     })
 
-    with open('/home/pi/PiPool/temps.json', 'w') as outfile:
-      json.dump(data, outfile)
+  with open('/home/pi/PiPool/temps.json', 'w') as outfile:
+    json.dump(data, outfile)
 
   time.sleep(13)
 

@@ -7,3 +7,5 @@ INSTRUCTIONS*
 st_endpoint.py
 config.json
 temps.json
+config.old
+config.ini

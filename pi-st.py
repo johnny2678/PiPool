@@ -14,64 +14,35 @@ import logging
 import pprint
 import json
 import RPi.GPIO as GPIO
-#from st_endpoint import *
+import configparser
 
-#os.environ['TZ']='UTC'
 os.environ['TZ'] = 'America/New_York'
 
 sess = requests.Session()
 adapter = requests.adapters.HTTPAdapter(max_retries=10)
 sess.mount('http://', adapter)
 
-def read_config():
-  with open('/home/pi/PiPool/config.json') as data_file:
-    config = json.loads(data_file.read())
-  logging.debug("reading config from json file")
-  nodejs_poolcontroller = config["integrations"][0]["poolController"][1]["enabled"]
-  sendto_smartthings = config["integrations"][0]["smartthings"][1]["enabled"]
-  auto_rpm = config["pump_options"][0]["auto_change_pump_rpm"][1]["auto_rpm"]
-  
-  rpm_change_mode = config["pump_options"][0]["auto_change_pump_rpm_mode"][1]["rpm_change_mode"]
-  temp_diff_ma = config["pump_options"][0]["temp_diff_ma"][1]
-  temp_diff_lb = config["pump_options"][0]["temp_diff_lb"][1]
-  temp_diff_ub = config["pump_options"][0]["temp_diff_ub"][1]
+logging.debug("reading config from json file")
+config = configparser.ConfigParser()
+config.read('/home/pi/PiPool/config.ini')
 
-  if config["script_options"][1]["logging_mode"] == "Debug":
-    debug_mode = True
-    verbose_mode = False
-  elif config["script_options"][1]["logging_mode"] == "Verbose":
-    verbose_mode = True
-    debug_mode = False
-  else:
-    verbose_mode = False
-    debug_mode = False
-  sendto_influxdb = config["integrations"][0]["influxDB"][1]["enabled"]
-  influx_host = config["integrations"][0]["influxDB"][1]["host"]
-  influx_port = config["integrations"][0]["influxDB"][1]["port"]
-  influx_user = config["integrations"][0]["influxDB"][1]["user"]
-  influx_password = config["integrations"][0]["influxDB"][1]["password"]
-  influx_db = config["integrations"][0]["influxDB"][1]["dbname"]
-  influx_db_retention_policy_name = config["integrations"][0]["influxDB"][1]["retention_policy"]
-  influx_db_retention_duration = config["integrations"][0]["influxDB"][1]["retention_duration"]
-  influx_db_retention_replication = config["integrations"][0]["influxDB"][1]["retention_replication"]
-  st_endpoint = config["integrations"][0]["smartthings"][1]["endpoint"]
-  st_api_token = config["integrations"][0]["smartthings"][1]["api_token"]
-  pump_base_rpm = config["pump_options"][0]["energy_baseline"][1]["pump_base_rpm"]
-  pump_base_watts = config["pump_options"][0]["energy_baseline"][1]["pump_base_watts"]
-  cents_per_kWh = config["pump_options"][0]["energy_baseline"][1]["cents_per_kWh"]
-#  pad_energy_usage = config["pump_options"][0]["energy_baseline"][1]["pad_energy_usage"]
-#  pad_energy_start_hour = config["pump_options"][0]["energy_baseline"][1]["pad_energy_start_hour"]
-#  pad_energy_stop_hour = config["pump_options"][0]["energy_baseline"][1]["pad_energy_stop_hour"]
+if config['script_options']['logging_mode'] == "Debug":
+  debug_mode = True
+  verbose_mode = False
+elif config['script_options']['logging_mode'] == "Verbose":
+  verbose_mode = True
+  debug_mode = False
+else:
+  verbose_mode = False
+  debug_mode = False
 
-#  return rpm_change_mode, temp_diff_ma, temp_diff_ub, temp_diff_lb, pad_energy_usage, pad_energy_start_hour, pad_energy_stop_hour, pump_base_rpm, pump_base_watts, cents_per_kWh, st_endpoint, st_api_token, sendto_smartthings, sendto_influxdb, nodejs_poolcontroller, auto_rpm, debug_mode, verbose_mode, influx_host, influx_port, influx_user, influx_password, influx_db, influx_db_retention_policy_name, influx_db_retention_duration, influx_db_retention_replication
-  return rpm_change_mode, temp_diff_ma, temp_diff_ub, temp_diff_lb, pump_base_rpm, pump_base_watts, cents_per_kWh, st_endpoint, st_api_token, sendto_smartthings, sendto_influxdb, nodejs_poolcontroller, auto_rpm, debug_mode, verbose_mode, influx_host, influx_port, influx_user, influx_password, influx_db, influx_db_retention_policy_name, influx_db_retention_duration, influx_db_retention_replication
+temp_diff_ma = config['auto_rpm_temp_diff_ma'].getint(config['auto_rpm_options']['rpm_change_mode'])
+temp_diff_lb = config['auto_rpm_temp_diff_lb'].getfloat(config['auto_rpm_options']['rpm_change_mode'])
+temp_diff_ub = config['auto_rpm_temp_diff_ub'].getfloat(config['auto_rpm_options']['rpm_change_mode'])
 
-#(rpm_change_mode, temp_diff_ma, temp_diff_ub, temp_diff_lb,pad_energy_usage, pad_energy_start_hour, pad_energy_stop_hour, pump_base_rpm, pump_base_watts, cents_per_kWh, st_endpoint, st_api_token, sendto_smartthings, sendto_influxdb, nodejs_poolcontroller, auto_rpm, debug_mode, verbose_mode, influx_host, influx_port, influx_user, influx_password, influx_db, influx_db_retention_policy_name, influx_db_retention_duration, influx_db_retention_replication) = read_config()
-(rpm_change_mode, temp_diff_ma, temp_diff_ub, temp_diff_lb,pump_base_rpm, pump_base_watts, cents_per_kWh, st_endpoint, st_api_token, sendto_smartthings, sendto_influxdb, nodejs_poolcontroller, auto_rpm, debug_mode, verbose_mode, influx_host, influx_port, influx_user, influx_password, influx_db, influx_db_retention_policy_name, influx_db_retention_duration, influx_db_retention_replication) = read_config()
-
-  
 #================================
 # Logging
+
 from logging.handlers import RotatingFileHandler
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 
@@ -108,6 +79,7 @@ logger.addHandler(fh_verbose)
 
 #=================================
 
+#temp sensor config
 #base_dir = '/sys/bus/w1/devices/'
 
 dsref = ['solarlead', 'solarreturn', 'poolreturn']
@@ -126,46 +98,13 @@ dsid["poolreturn"]    = "02161de351ee"
 pumprpms = ['Pool Lowest','Pool Lower','Pool Low','Pool High','Pool Higher','Pool Highest']
 pumprpm_id = [13,12,14,15,16,4]
 
-outside_temp_diff_offset = {
-  'aggressive'  : 3,
-  'balanced'    : 1.5,
-  'conservative': 0
-}
-
-outside_temp_schedule_start_offset = {
-  'aggressive'  : 8,
-  'balanced'    : 4,
-  'conservative': 1
-}
-
-top_rpm_offset = {
-  'aggressive'  : 0,
-  'balanced'    : 1,
-  'conservative': 2
-}
-
-bottom_rpm_offset = {
-  'aggressive'  : 2,
-  'balanced'    : 1,
-  'conservative': 0
-}
-
+#==================================
 
 ### no modifications should be needed below this line
-logging.verbose ("  st_endpoint: %s" % st_endpoint)
-logging.verbose ("  st_api_token: %s" % st_api_token)
+logging.verbose ("  st_endpoint: %s" % config['Integrations-Smartthings']['endpoint'])
+logging.verbose ("  st_api_token: %s" % config['Integrations-Smartthings']['api_token'])
  
-st_headers = { 'Authorization' : 'Bearer ' + st_api_token }
-
-last_temp_st={}
-temp_offset={}
-last_temp_influx={}
-last_temp_change_ts={}
-temp_change_per_sec={}
-temp_change_per_min={}
-temp_change_per_hour={}
-cur_temp = {}
-cur_temp_timestamp = {}
+st_headers = { 'Authorization' : 'Bearer ' + config['Integrations-Smartthings']['api_token'] }
 
 curtime = int(time.mktime(time.localtime()))
 pumpstarttime = curtime
@@ -178,28 +117,14 @@ if debug_mode or verbose_mode:
 else:
   cnt_offset = 20
 
-if auto_rpm == "False":
-  auto_rpm = None
-
-baseline_day_start = " 09:00:00"
-baseline_day_end   = " 17:00:00"
+baseline_day_start = " " + config['energy_baseline']['baseline_day_start']
+baseline_day_end   = " " + config['energy_baseline']['baseline_day_end']
 tsnow = datetime.datetime.now()
 epnow = datetime.datetime.now().timestamp()
 ts9 = str(tsnow.year) + '-' + str(tsnow.month) + '-' + str(tsnow.day) + baseline_day_start
 ep9 = int(time.mktime(time.strptime(ts9,'%Y-%m-%d %H:%M:%S')))
 ts5 = str(tsnow.year) + '-' + str(tsnow.month) + '-' + str(tsnow.day) + baseline_day_end
 ep5 = int(time.mktime(time.strptime(ts5,'%Y-%m-%d %H:%M:%S')))
-
-def initialize_vars():
-  for tmpds in dsref:
-    last_temp_st[tmpds]=999999.99
-    last_temp_influx[tmpds]=999999.99
-    last_temp_change_ts[tmpds]=999999.99
-    temp_change_per_hour[tmpds]=999999.99
-
-  temp_offset['solarlead'] = 0
-  temp_offset['solarreturn'] = -0.9
-  temp_offset['poolreturn'] = 0.112
 
 def influxdb(counter, temp_f, sub_dsname, sub_last_temp_influx, sub_solar_temp_diff, sub_temp_change_per_hour, tmpDataStatus, tmpPumpMode, tmpPumpBaseRPM, tmpPumpBaseWatts,last_temp_of_prev_day,first_temp_of_day,overnight_temp_loss,daily_temp_gain, net_temp_gain, running_temp_change_per_hour, tmptimesincelastmeasure):
 ## had to create separate strings for logging so floats/None could still be passed to Influx
@@ -229,17 +154,17 @@ def influxdb(counter, temp_f, sub_dsname, sub_last_temp_influx, sub_solar_temp_d
     tsnow = datetime.datetime.now()
     epnow = datetime.datetime.now().timestamp()
     
-    pump_rpm, pump_watts = get_pump_rpm(nodejs_poolcontroller)
-    pump_incremental_cost = cents_per_kWh / 1000 / 60 / 60 * pump_watts * tmptimesincelastmeasure
+    pump_rpm, pump_watts = get_pump_rpm(config['Integrations-poolController'].getboolean('enabled'))
+    pump_incremental_cost = config['energy_baseline'].getfloat('cents_per_kWh') / 1000 / 60 / 60 * pump_watts * tmptimesincelastmeasure
 
 
     logging.verbose("    checking that %s[ts5: %s] > %s[tsnow: %s] (diff %d) > %s[ts9: %s] (diff %d)" % (ep5,ts5,epnow,tsnow, ep5-epnow,ep9, ts9,epnow-ep9))
     if (ep5 > epnow > ep9):
-      logging.verbose("      calculating pump_base_incremental_cost with %d (cents_per_kWh), %d (tmpPumpBaseWatts), and %d (tmptimesincelastmeasure)" % (cents_per_kWh, tmpPumpBaseWatts, tmptimesincelastmeasure))
-      pump_base_incremental_cost = cents_per_kWh / 1000 / 60 / 60 * tmpPumpBaseWatts * tmptimesincelastmeasure
+      logging.verbose("      calculating pump_base_incremental_cost with %d (cents_per_kWh), %d (tmpPumpBaseWatts), and %d (tmptimesincelastmeasure)" % (config['energy_baseline'].getfloat('cents_per_kWh'), tmpPumpBaseWatts, tmptimesincelastmeasure))
+      pump_base_incremental_cost = config['energy_baseline'].getfloat('cents_per_kWh') / 1000 / 60 / 60 * tmpPumpBaseWatts * tmptimesincelastmeasure
     else:
-      pump_base_watts = None
-      pump_base_rpm = None
+      tmpPumpBaseWatts = None
+      tmpPumpBaseRPM = None
       pump_base_incremental_cost = None
 
     logging.verbose ("Sending Pool Usage data to InfluxDB(%s Cycle %04d( %s mode ): pump_rpm: %d, pump_watts: %d\n\ttime since last measurement: %d\n\tpump_incremental_cost: %.04f\tpump_base_incremental_cost: %s" % (tmpDataStatus, counter, tmpPumpMode, pump_rpm, pump_watts, tmptimesincelastmeasure, pump_incremental_cost, pump_base_incremental_cost))
@@ -292,7 +217,7 @@ def influxdb(counter, temp_f, sub_dsname, sub_last_temp_influx, sub_solar_temp_d
 
 def get_temp_diff_ma():
 
-  query = 'SELECT moving_average(mean("temp_solar_diff"), ' + str(temp_diff_ma[rpm_change_mode]) + ') FROM PiPool.pool_live_for_7d.PoolStats WHERE "mode" = \'pool\' AND "data_status" = \'Active\' AND time >= now() - 1h GROUP BY time(5s) fill(previous) ORDER BY time desc LIMIT 1'
+  query = 'SELECT moving_average(mean("temp_solar_diff"), ' + str(temp_diff_ma) + ') FROM PiPool.pool_live_for_7d.PoolStats WHERE "mode" = \'pool\' AND "data_status" = \'Active\' AND time >= now() - 1h GROUP BY time(5s) fill(previous) ORDER BY time desc LIMIT 1'
 
   try:
     result = client.query(query)
@@ -340,13 +265,6 @@ def get_first_temp():
       first_temp_of_day = testma["series"][0]["values"][3][1]
     except:
       logging.warning("Not enough data points to get average Solar Lead Temp in the last of the first 4 measurements. Will try again next time.")
-#      logging.warning("Not enough data points to get average Solar Lead Temp in the last of the first 4 measurements. Attempting to use the last of the first 3 measurements.")
-#      try:
-#        first_temp_of_day = testma["series"][0]["values"][2][1]
-#      except:
-#        logging.warning("  2nd attempt failed.  Will retry to get first temp of day next cycle.")
-##        first_temp_of_day = None
-##        first_temp_of_day = 80
     try:  
       time_of_first_temp = testma["series"][0]["values"][0][0]
     except:
@@ -422,13 +340,13 @@ def add_baseline_rpm():
   if (ep5 > epnow > ep9):
     logging.debug("Adding basline RPM values before shutting down.\n\n")
 
-    pump_base_incremental_cost = cents_per_kWh / 1000 / 60 * pump_base_watts
+    pump_base_incremental_cost = config['energy_baseline'].getfloat('cents_per_kWh') / 1000 / 60 * config['energy_baseline'].getint('pump_base_watts')
     influx_json = [
         {
           "measurement": "PoolStats",
           "fields": {
-            "pump_base_rpm": pump_base_rpm,
-            "pump_base_watts": pump_base_watts,
+            "pump_base_rpm": config['energy_baseline'].getint('pump_base_rpm'),
+            "pump_base_watts": config['energy_baseline'].getint('pump_base_watts'),
             "pump_base_incremental_cost": pump_base_incremental_cost
           }
         }
@@ -529,8 +447,7 @@ def change_pump_rpm(nodejs_poolcontroller, pump_rpm_speed_step, pump_rpm_action)
           logging.verbose("Circuit %s(%s) status = OFF - no action needed" % (pumprpms[tmpcnt],tmpcircuit))
         elif circuitstatus == 1:
           active_speed_step = tmpcnt
-#          if (pump_rpm_action == None or (pump_rpm_action == "increase" and tmpcnt != len(pumprpms) - top_rpm_offset[rpm_change_mode] - 1) or (pump_rpm_action == "decrease" and tmpcnt != bottom_rpm_offset[rpm_change_mode] -1 )):
-          if (pump_rpm_action == None or (pump_rpm_action and 0 <= tmpcnt < len(pumprpms) - top_rpm_offset[rpm_change_mode] - 1)):
+          if (pump_rpm_action == None or (pump_rpm_action and 0 <= tmpcnt < len(pumprpms) - top_rpm_offset[config['auto_rpm_options']['rpm_change_mode']] - 1)):
             logging.info("Circuit %s(%s) status = ON - toggling to OFF" % (pumprpms[tmpcnt],tmpcircuit))
             circuittoggle = toggle_circuit(tmpcnt)
 
@@ -550,10 +467,10 @@ def change_pump_rpm(nodejs_poolcontroller, pump_rpm_speed_step, pump_rpm_action)
     elif pump_rpm_action:
       prev_speed_step = active_speed_step
       if pump_rpm_action == "increase":
-        if active_speed_step < 5 - top_rpm_offset[rpm_change_mode] or active_speed_step is -1:
+        if active_speed_step < 5 - top_rpm_offset[config['auto_rpm_options']['rpm_change_mode']] or active_speed_step is -1:
           active_speed_step += 1
         else:
-          logging.debug("  Max speed step reached for %s mode.  Can't increase RPMs any higher" % rpm_change_mode)
+          logging.debug("  Max speed step reached for %s mode.  Can't increase RPMs any higher" % config['auto_rpm_options']['rpm_change_mode'])
       elif pump_rpm_action == "decrease":
         if active_speed_step >= 0:
           active_speed_step -= 1
@@ -564,7 +481,6 @@ def change_pump_rpm(nodejs_poolcontroller, pump_rpm_speed_step, pump_rpm_action)
         exit()
 
       if active_speed_step != prev_speed_step and active_speed_step != -1:
-#      if active_speed_step != prev_speed_step:
         logging.debug("    RPM CHANGE: The current speed step (%s) doesn't equal the previous speed step (%s)" % (active_speed_step, prev_speed_step))
         logging.debug("    RPM CHANGE: %s requested. Setting RPM to %s(%s)" % (pump_rpm_action, pumprpms[active_speed_step], pumprpm_id[active_speed_step]))
         circuittoggle = toggle_circuit(active_speed_step)
@@ -622,7 +538,7 @@ def read_temp(tmpds, lasttemp, tempoffset):
   return temp_f
 
 def pump_exit_if_off(ctime, tmpcnt):
-  pumpmode = get_pump_mode(nodejs_poolcontroller)
+  pumpmode = get_pump_mode(config['Integrations-poolController'].getboolean('enabled'))
 
   if pumpmode == 'off':
     logging.warning("Pump is not running. Exiting.")
@@ -631,7 +547,7 @@ def pump_exit_if_off(ctime, tmpcnt):
     except:
       logging.debug("Pump cycle count is not set so exiting without checking circuit status")
     else:
-      active_speed_step = change_pump_rpm(nodejs_poolcontroller, None, None)
+      active_speed_step = change_pump_rpm(config['Integrations-poolController'].getboolean('enabled'), None, None)
 
     try:
       logging.verbose("Adding Baseline RPM values before exiting. (Outside Sub)")
@@ -648,8 +564,6 @@ def pump_exit_if_off(ctime, tmpcnt):
 def main():
   pumphour = 1 
   dataStatus = 'Transitional'
-  old_pump_mode = None
-  pump_mode_time = None
   solar_prime_active = "false"
 
   global pumpstarttime
@@ -657,11 +571,19 @@ def main():
 
   upper_submit_limit = 125
   lower_submit_limit = 45
-  solar_temp_diff = None
-  last_solar_temp_diff = None
   pump_rpm_intro_period = 600
   pump_rpm_change_period = 600
   pump_rpm_transitional_period = 90
+
+  temp_offset={}
+  temp_change_per_sec={}
+  temp_change_per_min={}
+  cur_temp = {}
+  cur_temp_timestamp = {}
+
+  old_pump_mode = None
+  pump_mode_time = None
+
   pump_rpm_change_time = int(time.mktime(time.localtime()))
   active_speed_step = 0
   solar_temp_diff_ma = 0
@@ -678,15 +600,29 @@ def main():
   net_temp_gain = None
   running_temp_change_per_hour = None
 
-  initialize_vars()
+  solar_temp_diff = None
+  last_solar_temp_diff = None
+
+  last_temp_st={}
+  last_temp_influx={}
+  last_temp_change_ts={}
+  temp_change_per_hour={}
+
+  for tmpds in dsref:
+    last_temp_st[tmpds]=999999.99
+    last_temp_influx[tmpds]=999999.99
+    last_temp_change_ts[tmpds]=999999.99
+    temp_change_per_hour[tmpds]=999999.99
+
 
   cnt=0
   while (1):
+    config.read('/home/pi/PiPool/config.ini')
     curtime = int(time.mktime(time.localtime()))
     if cnt < 3:
       prevcurtime = curtime
 
-    pump_mode = get_pump_mode(nodejs_poolcontroller)
+    pump_mode = get_pump_mode(config['Integrations-poolController'].getboolean('enabled'))
 
     logging.info("\n\n\n---------------------- %s %s Cycle %d (%d) --------------------------" % (pump_mode,dataStatus,cnt, curtime))
 
@@ -706,7 +642,7 @@ def main():
 
       if cnt > 4:
         try:
-          active_speed_step = change_pump_rpm(nodejs_poolcontroller, None, None)
+          active_speed_step = change_pump_rpm(config['Integrations-poolController'].getboolean('enabled'), None, None)
         except Exception as e:
           logging.exception("\n\n\nJH SCRIPT ERROR:\n\n")
           logging.error(str(e)+"\n\n")
@@ -714,14 +650,14 @@ def main():
       logging.verbose("*** current_pump_mode = %s|old_pump_mode = %s" % (pump_mode, old_pump_mode))
 
     for tmpds in dsref:
-      temp_f = read_temp(dsid[tmpds], last_temp_influx[tmpds], temp_offset[tmpds]) 
+      temp_f = read_temp(dsid[tmpds], last_temp_influx[tmpds], config['temp_sensor_offset'].getfloat(tmpds)) 
       cur_temp[tmpds] = temp_f 
 
-      st_baseurl = st_endpoint + '/update/' + dsid[tmpds] + '/'
+      st_baseurl = config['Integrations-Smartthings']['endpoint'] + '/update/' + dsid[tmpds] + '/'
       endp_url = st_baseurl + ("%.2f/F" % temp_f)
 
       if ( lower_submit_limit <= temp_f <= upper_submit_limit ):
-        if ( sendto_smartthings and abs(round(temp_f, 2) - round(last_temp_st[tmpds], 2)) > 0.18 ):
+        if ( config['Integrations-Smartthings']['enabled'] and abs(round(temp_f, 2) - round(last_temp_st[tmpds], 2)) > 0.18 ):
           logging.verbose ("Endpoint submit URL: %s" % (endp_url))
           logging.verbose ("Sending to Smartthings (Cycle %04d): dsname: %s\ttemp_f: %.4f (oldtemp: %.4f)" % (cnt, dsname[tmpds], temp_f, last_temp_st[tmpds]))
           logging.info ("New Smartthings Temp recorded for %s:\t%.4f. Last Temp was:\t%.4f." % (dsname[tmpds], temp_f, last_temp_st[tmpds]))
@@ -733,7 +669,7 @@ def main():
           last_temp_st[tmpds] = temp_f
 
 #        if ( sendto_influxdb and (round(cur_temp[tmpds], 2) != round(last_temp_influx[tmpds], 2) or (cnt < 20 and first_temp_of_day == None))):
-        if ( sendto_influxdb or (cnt < 20 and first_temp_of_day == None)):
+        if ( config['Integrations-InfluxDB'].getboolean('Enabled') or (cnt < 20 and first_temp_of_day == None)):
           logging.verbose("\n\ncur_temp DICT:")
           logging.verbose(cur_temp)
 
@@ -757,7 +693,7 @@ def main():
 
           try:
             logging.verbose("\n\n**** curtime:\t%d\n**** prevcurtime:\t%d\n\n" % (curtime, prevcurtime))
-            influxdb(cnt, cur_temp[tmpds], dsname[tmpds], last_temp_influx[tmpds], solar_temp_diff, temp_change_per_hour[tmpds], dataStatus, pump_mode, pump_base_rpm, pump_base_watts, last_temp_of_prev_day,first_temp_of_day,overnight_temp_loss,daily_temp_gain, net_temp_gain, running_temp_change_per_hour, curtime - prevcurtime)
+            influxdb(cnt, cur_temp[tmpds], dsname[tmpds], last_temp_influx[tmpds], solar_temp_diff, temp_change_per_hour[tmpds], dataStatus, pump_mode, config['energy_baseline'].getint('pump_base_rpm'), config['energy_baseline'].getint('pump_base_watts'), last_temp_of_prev_day,first_temp_of_day,overnight_temp_loss,daily_temp_gain, net_temp_gain, running_temp_change_per_hour, curtime - prevcurtime)
           except Exception as e:
             logging.exception("\n\n\nJH SCRIPT ERROR:\n\n")
             logging.error(str(e)+"\n\n")
@@ -765,19 +701,19 @@ def main():
           last_temp_influx[tmpds] = cur_temp[tmpds]
           last_temp_change_ts[tmpds] = curtime
         else:
-          logging.verbose("\n\n *** Sendto_influxdb value: %r" % sendto_influxdb)
+          logging.verbose("\n\n *** Sendto_influxdb value: %r" % config['Integrations-InfluxDB'].getboolean('Enabled'))
           if tmpds == 'solarlead':
             logging.verbose("\n\n *** Sending usage data even though temp didn't change ***\n\n")
             try:
-              influxdb(cnt,None,dsname[tmpds],None,None,None,dataStatus,pump_mode, pump_base_rpm, pump_base_watts,None,None,None,None,None,None, curtime - prevcurtime)
+              influxdb(cnt,None,dsname[tmpds],None,None,None,dataStatus,pump_mode, config['energy_baseline'].getint('pump_base_rpm'), config['energy_baseline'].getint('pump_base_watts'),None,None,None,None,None,None, curtime - prevcurtime)
             except Exception as e:
               logging.exception("\n\n\nJH SCRIPT ERROR:\n\n")
               logging.error(str(e)+"\n\n")
 
     # Prime system/solar panels when rpm change indicates solar has been turned on OR when Chlorinator detects low flow
     if cnt > 4 and dataStatus == 'Active' and solar_prime_active == "false":
-      pump_rpm, pump_watts = get_pump_rpm(nodejs_poolcontroller)     
-      swg_status = get_swg_status(nodejs_poolcontroller)
+      pump_rpm, pump_watts = get_pump_rpm(config['Integrations-poolController'].getboolean('enabled'))     
+      swg_status = get_swg_status(config['Integrations-poolController'].getboolean('enabled'))
       solar_diff_diff = solar_temp_diff - last_solar_temp_diff
       solar_temp_diff_ma = get_temp_diff_ma()
 
@@ -799,7 +735,7 @@ def main():
           logging.debug ("    SWG status       : %s" % swg_status)
           solar_prime_activated_ts = curtime 
           solar_prime_active = "true"
-          active_speed_step = change_pump_rpm(nodejs_poolcontroller, 3, None)
+          active_speed_step = change_pump_rpm(config['Integrations-poolController'].getboolean('enabled'), 3, None)
       else:
         logging.debug ("Solar priming NOT active:")
         logging.verbose ("    current temp diff: %.4f - last temp diff: %.4f =  temp diff diff: %.4f" % (solar_temp_diff, last_solar_temp_diff, solar_diff_diff))
@@ -814,7 +750,7 @@ def main():
         solar_prime_active = "false"
         logging.info ("Solar priming has been running for the last %d seconds.  Deactivating" % solar_prime_elapsed_sec)
         pump_rpm_speed_step = None
-        active_speed_step = change_pump_rpm(nodejs_poolcontroller, pump_rpm_speed_step, None)
+        active_speed_step = change_pump_rpm(config['Integrations-poolController'].getboolean('enabled'), pump_rpm_speed_step, None)
       else:
         logging.debug ("Solar Priming STILL ACTIVE - will remain active for 5 minutes (%d seconds elapsed)" % solar_prime_elapsed_sec)
     
@@ -823,28 +759,28 @@ def main():
 
     # Change RPM speed based on temperature differences
     pump_rpm_speed_step = None
-    if auto_rpm and solar_prime_active == "false" and dataStatus == "Active" and pump_mode == "pool" and active_speed_step <= len(pumprpms)-1 and cnt > cnt_offset:
-      logging.verbose("  **** current temp: %s current speed step: %s len(pumprpms): %s top_rpm_offset[%s]: %s bottom_rpm_offset[%s]: %s" % (cur_temp['solarlead'], active_speed_step, len(pumprpms), rpm_change_mode, top_rpm_offset[rpm_change_mode], rpm_change_mode, bottom_rpm_offset[rpm_change_mode]))
-      if cur_temp['solarlead'] < 87 and active_speed_step <= len(pumprpms) - top_rpm_offset[rpm_change_mode]:
+    if config['auto_rpm_options'].getboolean('auto_rpm') and solar_prime_active == "false" and dataStatus == "Active" and pump_mode == "pool" and active_speed_step <= len(pumprpms)-1 and cnt > cnt_offset:
+      logging.verbose("  **** current temp: %s current speed step: %s len(pumprpms): %s top_rpm_offset[%s]: %s bottom_rpm_offset[%s]: %s" % (cur_temp['solarlead'], active_speed_step, len(pumprpms), config['auto_rpm_options']['rpm_change_mode'], config['auto_rpm_top_rpm_offset'].getint(config['auto_rpm_options']['rpm_change_mode']), config['auto_rpm_options']['rpm_change_mode'], config['auto_rpm_bottom_rpm_offset'].getint(config['auto_rpm_options']['rpm_change_mode'])))
+      if cur_temp['solarlead'] < 87 and active_speed_step <= len(pumprpms) - top_rpm_offset[config['auto_rpm_options']['rpm_change_mode']]:
           rpm_change_elapsed_sec = curtime - pump_rpm_change_time
           if rpm_change_elapsed_sec > pump_rpm_change_period:
             logging.debug("  Criteria for rpm change met. Checking solar_temp_diff: %s" % (solar_temp_diff_ma))
-            if solar_temp_diff_ma >= temp_diff_ub[rpm_change_mode]:
-              logging.info("    Temp diff (%.4f) above threshold of %s; increasing RPM" % (solar_temp_diff_ma, temp_diff_ub[rpm_change_mode]))
-              active_speed_step = change_pump_rpm(nodejs_poolcontroller, None, "increase")
+            if solar_temp_diff_ma >= temp_diff_ub:
+              logging.info("    Temp diff (%.4f) above threshold of %s; increasing RPM" % (solar_temp_diff_ma, temp_diff_ub))
+              active_speed_step = change_pump_rpm(config['Integrations-poolController'].getboolean('enabled'), None, "increase")
               pump_rpm_change_time = curtime
-            elif solar_temp_diff_ma < temp_diff_lb[rpm_change_mode]:
-              logging.info("    Temp diff (%.4f) below threshold of %s; decreasing RPM" % (solar_temp_diff_ma, temp_diff_lb[rpm_change_mode]))
-              active_speed_step = change_pump_rpm(nodejs_poolcontroller, None, "decrease")
+            elif solar_temp_diff_ma < temp_diff_lb:
+              logging.info("    Temp diff (%.4f) below threshold of %s; decreasing RPM" % (solar_temp_diff_ma, temp_diff_lb))
+              active_speed_step = change_pump_rpm(config['Integrations-poolController'].getboolean('enabled'), None, "decrease")
               pump_rpm_change_time = curtime
             else:
-              logging.debug("    NO RPM CHANGE: Temp diff between %s range of %s and %s." % (rpm_change_mode, temp_diff_lb[rpm_change_mode], temp_diff_ub[rpm_change_mode]))
+              logging.debug("    NO RPM CHANGE: Temp diff between %s range of %s and %s." % (config['auto_rpm_options']['rpm_change_mode'], temp_diff_lb, temp_diff_ub))
           else:
             logging.debug ("    NO RPM CHANGE: Current RPM will remain active for %d seconds (%d seconds elapsed)" % (pump_rpm_change_period, rpm_change_elapsed_sec))
-      elif cur_temp['solarlead'] >= 87 and active_speed_step >= bottom_rpm_offset[rpm_change_mode]:
+      elif cur_temp['solarlead'] >= 87 and active_speed_step >= bottom_rpm_offset[config['auto_rpm_options']['rpm_change_mode']]:
         logging.debug ("    RPM CHANGE - reducing RPMs - pool is at or above comfort level: %s (expected <87): " % cur_temp['solarlead'])
-        logging.verbose ("    RPM CHANGE - Active Speed Step (%s) is greater than equal to %s threshold of %s" % (active_speed_step, rpm_change_mode, bottom_rpm_offset[rpm_change_mode]))
-        active_speed_step = change_pump_rpm(nodejs_poolcontroller, None, None)
+        logging.verbose ("    RPM CHANGE - Active Speed Step (%s) is greater than equal to %s threshold of %s" % (active_speed_step, config['auto_rpm_options']['rpm_change_mode'], bottom_rpm_offset[config['auto_rpm_options']['rpm_change_mode']]))
+        active_speed_step = change_pump_rpm(config['Integrations-poolController'].getboolean('enabled'), None, None)
       else:
         logging.debug ("    NO RPM CHANGE: Pool is above comfort level: %s (expected <87), and Pump RPMs are at minimum." % cur_temp['solarlead'])
     else:
@@ -853,7 +789,7 @@ def main():
       logging.verbose ("    Data Status: %s" % dataStatus)
       logging.verbose ("    Pump Mode: %s" % pump_mode)
       logging.verbose ("    Cycle Cnt: %s" % cnt)
-      logging.verbose ("    Auto RPM value: %s (expected True)" % auto_rpm)    
+      logging.verbose ("    Auto RPM value: %s (expected True)" % config['auto_rpm_options'].getboolean('auto_rpm'))    
     
     if((cnt > 25 and first_temp_of_day is None) or cnt == 0):
       logging.debug("\n\n** Getting First Temp of Day **")
@@ -905,24 +841,24 @@ def main():
 pump_exit_if_off(curtime, cnt)
 
 #=====================================
-if sendto_influxdb:
 
+if config['Integrations-InfluxDB'].getboolean('Enabled'):
    from influxdb import InfluxDBClient
-   client = InfluxDBClient(influx_host, influx_port, influx_user, influx_password, influx_db,retries=0)
+   client = InfluxDBClient(config['Integrations-InfluxDB']['host'], config['Integrations-InfluxDB']['port'], config['Integrations-InfluxDB']['user'], config['Integrations-InfluxDB']['password'], config['Integrations-InfluxDB']['dbname'],retries=0)
 
    try:
-      logging.info("Creating (if not exists) INFLUX DB %s" % (influx_db))
-      client.create_database(influx_db)
+      logging.info("Creating (if not exists) INFLUX DB %s" % (config['Integrations-InfluxDB']['dbname']))
+      client.create_database(config['Integrations-InfluxDB']['dbname'])
    except:
-      logging.error("Unable to create/connect to INFLUX DB %s" % (influx_db))
+      logging.error("Unable to create/connect to INFLUX DB %s" % (config['Integrations-InfluxDB']['dbname']))
       raise
       exit()
 
    try:
-      logging.info("Creating (if not exists) retention policy on INFLUX DB %s" % (influx_db))
-      client.create_retention_policy(influx_db_retention_policy_name, influx_db_retention_duration, influx_db_retention_replication)
+      logging.info("Creating (if not exists) retention policy on INFLUX DB %s" % (config['Integrations-InfluxDB']['dbname']))
+      client.create_retention_policy(config['Integrations-InfluxDB']['retention_policy'], config['Integrations-InfluxDB']['retention_duration'], config['Integrations-InfluxDB']['retention_replication'])
    except:
-      logging.error("Unable to create INFLUX DB retention policy on DB %s" % (influx_db))
+      logging.error("Unable to create INFLUX DB retention policy on DB %s" % (config['Integrations-InfluxDB']['dbname']))
       raise
       exit()
 
