@@ -22,9 +22,14 @@ sess = requests.Session()
 adapter = requests.adapters.HTTPAdapter(max_retries=10)
 sess.mount('http://', adapter)
 
-logging.debug("reading config from json file")
+logging.debug("reading config from INI file")
 config = configparser.ConfigParser()
 config.read('/home/pi/PiPool/config.ini')
+
+if config['Integrations-InfluxDB'].getboolean('Enabled'):
+  from influxdb import InfluxDBClient
+  client = InfluxDBClient(config['Integrations-InfluxDB']['host'], config['Integrations-InfluxDB']['port'], config['Integrations-InfluxDB']['user'], config['Integrations-InfluxDB']['password'], config['Integrations-InfluxDB']['dbname'],retries=0)
+
 
 if config['script_options']['logging_mode'] == "Debug":
   debug_mode = True
@@ -100,6 +105,15 @@ pumprpm_id = [13,12,14,15,16,4]
 
 #==================================
 
+chem_sensors = ['ph','orp']
+
+last_chem_value={}
+
+for chem_sensor in chem_sensors:
+  last_chem_value[chem_sensor] = 999999.99
+
+#==================================
+
 ### no modifications should be needed below this line
 logging.verbose ("  st_endpoint: %s" % config['Integrations-Smartthings']['endpoint'])
 logging.verbose ("  st_api_token: %s" % config['Integrations-Smartthings']['api_token'])
@@ -125,6 +139,34 @@ ts9 = str(tsnow.year) + '-' + str(tsnow.month) + '-' + str(tsnow.day) + baseline
 ep9 = int(time.mktime(time.strptime(ts9,'%Y-%m-%d %H:%M:%S')))
 ts5 = str(tsnow.year) + '-' + str(tsnow.month) + '-' + str(tsnow.day) + baseline_day_end
 ep5 = int(time.mktime(time.strptime(ts5,'%Y-%m-%d %H:%M:%S')))
+
+def influx_chem(subchemvalue, subchemsensor, tmpPumpMode, tmpDataStatus):
+  logging.verbose("current chem sensor is: %s:" % subchemsensor)
+
+  ph_value = None
+  orp_value = None
+
+  if subchemsensor == "ph":
+    ph_value = subchemvalue
+  elif subchemsensor == "orp":
+    orp_value = subchemvalue
+
+  influx_json = [
+  {
+    "measurement": "PoolStats",
+    "tags": {
+       "chemistry": "auto-test",
+       "mode": tmpPumpMode,
+       "data_status": tmpDataStatus
+    },
+    "fields": {
+       "Ph": ph_value,
+       "ORP": orp_value 
+    }
+  }
+]
+        
+  client.write_points(influx_json, retention_policy='pool_live_for_7d')
 
 def influxdb(counter, temp_f, sub_dsname, sub_last_temp_influx, sub_solar_temp_diff, sub_temp_change_per_hour, tmpDataStatus, tmpPumpMode, tmpPumpBaseRPM, tmpPumpBaseWatts,last_temp_of_prev_day,first_temp_of_day,overnight_temp_loss,daily_temp_gain, net_temp_gain, running_temp_change_per_hour, tmptimesincelastmeasure):
 ## had to create separate strings for logging so floats/None could still be passed to Influx
@@ -353,7 +395,7 @@ def add_baseline_rpm():
       ]
     client.write_points(influx_json, retention_policy='pool_live_for_7d')
   else:
-    logging.info("Pump is off and time is not between 9AM and 5PM. Exiting.\n\n")        
+    logging.info("Pump is off and time is not between 9AM and 5PM. \n\n")        
 
 def get_pump_mode(nodejs_poolcontroller):
   if nodejs_poolcontroller:
@@ -537,6 +579,30 @@ def read_temp(tmpds, lasttemp, tempoffset):
 
   return temp_f
 
+def read_chem(chemname, lastchem):
+
+  chemvalue = None
+
+  try:
+    with open('/home/pi/PiPool/chem.json') as json_file:
+      chem = json.loads(json_file.read())
+  except:
+    chemvalue = lastchem
+    return chemvalue
+    
+  for sensor in chem["sensor"]:
+    logging.verbose("checking json entry %s matches script value %s", sensor['name'], chemname)
+    if (str(sensor['name'])) == chemname:
+      try:
+        chemvalue = sensor['value']
+      except:
+        logging.verbose("Unable to read value for chem sensor %s" % sensor[chemname])
+
+  if not chemvalue:
+    chemvalue = lastchem
+
+  return chemvalue
+
 def pump_exit_if_off(ctime, tmpcnt):
   pumpmode = get_pump_mode(config['Integrations-poolController'].getboolean('enabled'))
 
@@ -555,6 +621,22 @@ def pump_exit_if_off(ctime, tmpcnt):
     except Exception as e:
       logging.exception("\n\n\nJH SCRIPT ERROR:\n\n")
       logging.error(str(e)+"\n\n")
+
+    logging.verbose("Adding Chem values before exiting. (Outside Sub)")
+    for chem_sensor in chem_sensors:
+      chemvalue = read_chem(chem_sensor,last_chem_value[chem_sensor])
+
+      if (chem_sensor == "orp" and 0 <= chemvalue <= 5000) or (chem_sensor == "ph" and 0 <= chemvalue <= 15):
+        try:
+          pump_mode = "OFF"
+          dataStatus = None
+          influx_chem(chemvalue, chem_sensor, pump_mode, dataStatus)
+        except Exception as e:
+          logging.exception("\n\n\nJH SCRIPT ERROR:\n\n")
+          logging.error(str(e)+"\n\n")
+      else:
+        logging.error("\n\n CHEM VALUE OUT OF BOUNDS %s: %f" % chem_sensor, chemvalue)
+    
     exit()
 
   if pumpstarttime and ctime:
@@ -607,12 +689,16 @@ def main():
   last_temp_influx={}
   last_temp_change_ts={}
   temp_change_per_hour={}
+  last_chem_value={}
 
   for tmpds in dsref:
     last_temp_st[tmpds]=999999.99
     last_temp_influx[tmpds]=999999.99
     last_temp_change_ts[tmpds]=999999.99
     temp_change_per_hour[tmpds]=999999.99
+
+  for chem_sensor in chem_sensors:
+    last_chem_value[chem_sensor] = 999999.99
 
 
   cnt=0
@@ -648,6 +734,18 @@ def main():
           logging.error(str(e)+"\n\n")
     else:
       logging.verbose("*** current_pump_mode = %s|old_pump_mode = %s" % (pump_mode, old_pump_mode))
+
+    for chem_sensor in chem_sensors:
+      chemvalue = read_chem(chem_sensor,last_chem_value[chem_sensor])
+
+      if (chem_sensor == "orp" and 0 <= chemvalue <= 5000) or (chem_sensor == "ph" and 0 <= chemvalue <= 15):
+        try:
+          influx_chem(chemvalue, chem_sensor, pump_mode, dataStatus)
+        except Exception as e:
+          logging.exception("\n\n\nJH SCRIPT ERROR:\n\n")
+          logging.error(str(e)+"\n\n")
+      else:
+        logging.error("\n\n CHEM VALUE OUT OF BOUNDS %s: %f" % chem_sensor, chemvalue)
 
     for tmpds in dsref:
       temp_f = read_temp(dsid[tmpds], last_temp_influx[tmpds], config['temp_sensor_offset'].getfloat(tmpds)) 
@@ -843,8 +941,6 @@ pump_exit_if_off(curtime, cnt)
 #=====================================
 
 if config['Integrations-InfluxDB'].getboolean('Enabled'):
-   from influxdb import InfluxDBClient
-   client = InfluxDBClient(config['Integrations-InfluxDB']['host'], config['Integrations-InfluxDB']['port'], config['Integrations-InfluxDB']['user'], config['Integrations-InfluxDB']['password'], config['Integrations-InfluxDB']['dbname'],retries=0)
 
    try:
       logging.info("Creating (if not exists) INFLUX DB %s" % (config['Integrations-InfluxDB']['dbname']))
